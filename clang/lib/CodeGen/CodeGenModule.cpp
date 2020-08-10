@@ -1577,6 +1577,13 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   if (!hasUnwindExceptions(LangOpts))
     B.addAttribute(llvm::Attribute::NoUnwind);
 
+  // time analysis check for attribute on functions
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D)) {
+    if (FD->hasAttr<TimeTargetAttr>()) {
+      B.addAttribute(llvm::Attribute::TimeTarget);
+    }
+  }
+
   if (!D || !D->hasAttr<NoStackProtectorAttr>()) {
     if (LangOpts.getStackProtector() == LangOptions::SSPOn)
       B.addAttribute(llvm::Attribute::StackProtect);

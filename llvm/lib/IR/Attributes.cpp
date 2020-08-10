@@ -449,6 +449,9 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
     return "immarg";
   if (hasAttribute(Attribute::NoUndef))
     return "noundef";
+  // time analysis target
+  if (hasAttribute(Attribute::TimeTarget))
+    return "time_target";
 
   if (hasAttribute(Attribute::ByVal)) {
     std::string Result;

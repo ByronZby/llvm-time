@@ -1366,6 +1366,8 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
       B.addPreallocatedAttr(Ty);
       break;
     }
+    // time analysis
+    case lltok::kw_time_target: B.addAttribute(Attribute::TimeTarget); break;
 
     // Error handling.
     case lltok::kw_inreg:

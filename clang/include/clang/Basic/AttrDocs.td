@@ -4984,3 +4984,13 @@ Requirements on Development Tools - Engineering Specification Documentation
 <https://developer.arm.com/docs/ecm0359818/latest/>`_ for more information.
   }];
 }
+
+// time analysis doc
+def TimeTargetDocs : Documentation {
+  let Category = DocCatFunction;
+  let Heading = "Time Analysis Target";
+  let Content = [{
+This attribute declares a function that needs to be modified to pass information
+to time analysis runtime.
+  }];
+}

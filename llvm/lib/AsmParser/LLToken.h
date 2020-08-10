@@ -445,6 +445,8 @@ enum Kind {
   kw_byte,
   kw_bit,
   kw_varFlags,
+  // time analysis
+  kw_time_target,
 
   // Unsigned Valued tokens (UIntVal).
   LabelID,    // 42:

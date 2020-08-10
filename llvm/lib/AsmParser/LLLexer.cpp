@@ -812,6 +812,9 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(byte);
   KEYWORD(bit);
   KEYWORD(varFlags);
+  
+  // time analysis
+  KEYWORD(time_target);
 
 #undef KEYWORD
 
