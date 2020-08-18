@@ -11,7 +11,7 @@ if(WIN32 OR CYGWIN)
 endif()
 
 add_llvm_library( LLVMTime MODULE BUILDTREE_ONLY
-  Time.cpp
+  BasicTime.cpp
 
   DEPENDS
   intrinsics_gen
