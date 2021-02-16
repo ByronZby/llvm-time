@@ -11,10 +11,15 @@ if(WIN32 OR CYGWIN)
 endif()
 
 add_llvm_library( LLVMTime MODULE BUILDTREE_ONLY
-  BasicTime.cpp
+  Time.cpp
+  ProbeDecl.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms/Time
 
   DEPENDS
   intrinsics_gen
+
   PLUGIN_TOOL
   opt
   )
