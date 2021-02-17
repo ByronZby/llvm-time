@@ -9,6 +9,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -71,8 +72,12 @@ bool TimePass::runOnLoop(Loop *L, LPPassManager &LPM) {
     SmallVector<BasicBlock *, 8> exits;
     L->getExitBlocks(exits);
 
+    SmallPtrSet<const BasicBlock *, 8> visited;
     for (BasicBlock *exit : exits) {
-        placeExitInstrument(exit, loopName);
+        if (!visited.contains(exit)) {
+            visited.insert(exit);
+            placeExitInstrument(exit, loopName);
+        }
     }
 
     return true;
@@ -95,43 +100,49 @@ bool TimePass::doInitialization(Loop *L, LPPassManager &LPM) {
 void TimePass::placeEntryInstrument(BasicBlock *header, GlobalVariable *name) {
     Module *M = header->getModule();
     auto insertPt = header->getTerminator();
+    auto debugLoc = insertPt->getDebugLoc();
 
     dbgs() << "Placing an entry point at ";
-    insertPt->getDebugLoc().print(dbgs());
+    debugLoc.print(dbgs());
     dbgs() << "\n";
 
-    CallInst::Create(instrument.enter_loop,
-                     {referStringLiteral(name, M)},
-                     "",
-                     &*insertPt);
+    auto CI = CallInst::Create(instrument.enter_loop,
+                               {referStringLiteral(name, M)},
+                               "",
+                               &*insertPt);
+    CI->setDebugLoc(debugLoc);
 }
 
 void TimePass::placeExitInstrument(BasicBlock *exit, GlobalVariable *name) {
     Module *M = exit->getModule();
     auto insertPt = exit->getFirstInsertionPt();
+    auto debugLoc = insertPt->getDebugLoc();
 
     dbgs() << "Placing an exit point at ";
-    insertPt->getDebugLoc().print(dbgs());
+    debugLoc.print(dbgs());
     dbgs() << "\n";
 
-    CallInst::Create(instrument.exit_loop,
-                     {referStringLiteral(name, M)},
-                     "",
-                     &*insertPt);
+    auto CI = CallInst::Create(instrument.exit_loop,
+                               {referStringLiteral(name, M)},
+                               "",
+                               &*insertPt);
+    CI->setDebugLoc(debugLoc);
 }
 
 void TimePass::placeLatchInstrument(BasicBlock *latch, GlobalVariable *name) {
     Module *M = latch->getModule();
     auto insertPt = latch->getTerminator();
+    auto debugLoc = insertPt->getDebugLoc();
 
     dbgs() << "Placing an exit point at ";
-    insertPt->getDebugLoc().print(dbgs());
+    debugLoc.print(dbgs());
     dbgs() << "\n";
 
-    CallInst::Create(instrument.latch,
-                     {referStringLiteral(name, M)},
-                     "",
-                     &*insertPt);
+    auto CI = CallInst::Create(instrument.latch,
+                               {referStringLiteral(name, M)},
+                               "",
+                               &*insertPt);
+    CI->setDebugLoc(debugLoc);
 }
 
 static std::string getDebugLocString(const Loop *L) {
