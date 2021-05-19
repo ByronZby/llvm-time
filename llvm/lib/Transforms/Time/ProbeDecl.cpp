@@ -20,6 +20,7 @@ void Instrument::declare(Module &M) {
     MAKE_FUNC(enter_loop, voidty, i8ptrty);
     MAKE_FUNC(exit_loop, voidty, i8ptrty);
     MAKE_FUNC(latch, voidty, i8ptrty);
+    MAKE_FUNC(path, voidty, Type::getInt32Ty(M.getContext()));
 }
 
 void Instrument::placeCtorDtor(llvm::Module &M) {

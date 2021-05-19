@@ -3,24 +3,29 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProbeDecl.h"
+#include "Path.h"
+
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+
+#include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/LoopPass.h"
+
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IRBuilder.h"
 
 #include "llvm/Pass.h"
-#include "llvm/Analysis/LoopPass.h"
-#include "llvm/Analysis/LoopInfo.h"
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
-
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/GlobalVariable.h"
-#include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/DebugLoc.h"
-
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/WithColor.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/WithColor.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+using namespace LLVMTime;
 
 #define DEBUG_TYPE "time"
 
@@ -80,6 +85,30 @@ bool TimePass::runOnLoop(Loop *L, LPPassManager &LPM) {
         }
     }
 
+    L->print(dbgs(), 0, true);
+
+    dbgs() << "Done... Trying Path Profiling\n";
+
+    if (!L->isInnermost()) {
+        dbgs() << "Loop is not the innermost...Skip\n";
+        return true;
+    }
+
+    std::error_code EC;
+    raw_fd_ostream fs("PathProfile.json", EC);
+    assert(!EC && "Can't open pathprofile file\n");
+
+    Value *PathNumPtr = instrumentPathProfile(L, fs);
+
+    BasicBlock *Latch = L->getLoopLatch();
+    Instruction *InsertPt = &*Latch->getFirstInsertionPt();
+    IRBuilder<> Builder(InsertPt);
+
+    Value *PathNum = Builder.CreateLoad(Type::getInt32Ty(Builder.getContext()), PathNumPtr, "pathnum");
+    Builder.CreateCall(instrument.path, {PathNum});
+
+
+    dbgs() << "Done... Returning \n\n";
     return true;
 }
 
@@ -162,7 +191,7 @@ static std::string getDebugLocString(const Loop *L) {
     return result;
 }
 
-GlobalVariable *declareStringLiteral(const std::string &s, Module *M) {
+static GlobalVariable *declareStringLiteral(const std::string &s, Module *M) {
     Constant *val = ConstantDataArray::getString(M->getContext(), s);
     auto *gv = new GlobalVariable(
             *M,
@@ -177,7 +206,7 @@ GlobalVariable *declareStringLiteral(const std::string &s, Module *M) {
     return gv;
 }
 
-Constant *referStringLiteral(GlobalVariable *strlit, Module *M) {
+static Constant *referStringLiteral(GlobalVariable *strlit, Module *M) {
     std::vector<Constant *> indices;
     ConstantInt *const_zero = ConstantInt::get(
             Type::getInt32Ty(M->getContext()),
@@ -187,9 +216,11 @@ Constant *referStringLiteral(GlobalVariable *strlit, Module *M) {
     indices.push_back(const_zero);
     indices.push_back(const_zero);
 
-    return ConstantExpr::getGetElementPtr(strlit->getType()->getElementType(), strlit, indices, true /*isInBound*/);
+    return ConstantExpr::getGetElementPtr(strlit->getType()->getElementType(),
+                                          strlit,
+                                          indices,
+                                          true /*isInBound*/);
 }
-
 
 char TimePass::ID = 0;
 static RegisterPass<TimePass> X("time", "Timing Instrumentation", false, false);

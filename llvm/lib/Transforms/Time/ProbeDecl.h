@@ -17,6 +17,7 @@ struct Instrument {
     llvm::FunctionCallee enter_loop;
     llvm::FunctionCallee exit_loop;
     llvm::FunctionCallee latch;
+    llvm::FunctionCallee path;
 
     void declare(llvm::Module &);
     void placeCtorDtor(llvm::Module &);
