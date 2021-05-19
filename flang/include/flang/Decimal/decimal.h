@@ -105,17 +105,17 @@ ConversionToBinaryResult<PREC> ConvertToBinary(
     const char *&, enum FortranRounding = RoundNearest);
 
 extern template ConversionToBinaryResult<8> ConvertToBinary<8>(
-    const char *&, enum FortranRounding = RoundNearest);
+    const char *&, enum FortranRounding);
 extern template ConversionToBinaryResult<11> ConvertToBinary<11>(
-    const char *&, enum FortranRounding = RoundNearest);
+    const char *&, enum FortranRounding);
 extern template ConversionToBinaryResult<24> ConvertToBinary<24>(
-    const char *&, enum FortranRounding = RoundNearest);
+    const char *&, enum FortranRounding);
 extern template ConversionToBinaryResult<53> ConvertToBinary<53>(
-    const char *&, enum FortranRounding = RoundNearest);
+    const char *&, enum FortranRounding);
 extern template ConversionToBinaryResult<64> ConvertToBinary<64>(
-    const char *&, enum FortranRounding = RoundNearest);
+    const char *&, enum FortranRounding);
 extern template ConversionToBinaryResult<113> ConvertToBinary<113>(
-    const char *&, enum FortranRounding = RoundNearest);
+    const char *&, enum FortranRounding);
 } // namespace Fortran::decimal
 extern "C" {
 #define NS(x) Fortran::decimal::x
@@ -129,20 +129,16 @@ struct NS(ConversionToDecimalResult)
 struct NS(ConversionToDecimalResult)
     ConvertDoubleToDecimal(char *, size_t, enum NS(DecimalConversionFlags),
         int digits, enum NS(FortranRounding), double);
-#if __x86_64__ && !defined(_MSC_VER)
 struct NS(ConversionToDecimalResult)
     ConvertLongDoubleToDecimal(char *, size_t, enum NS(DecimalConversionFlags),
         int digits, enum NS(FortranRounding), long double);
-#endif
 
 enum NS(ConversionResultFlags)
     ConvertDecimalToFloat(const char **, float *, enum NS(FortranRounding));
 enum NS(ConversionResultFlags)
     ConvertDecimalToDouble(const char **, double *, enum NS(FortranRounding));
-#if __x86_64__ && !defined(_MSC_VER)
 enum NS(ConversionResultFlags) ConvertDecimalToLongDouble(
     const char **, long double *, enum NS(FortranRounding));
-#endif
 #undef NS
 #ifdef __cplusplus
 } // extern "C"

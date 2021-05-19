@@ -1,5 +1,5 @@
-; RUN: llc < %s -asm-verbose=0 -mtriple=arm64-eabi | FileCheck %s
-; RUN: llc < %s -asm-verbose=0 -mtriple=aarch64-eabi | FileCheck %s
+; RUN: llc < %s -asm-verbose=0 -mtriple=arm64-eabi -mattr=+bf16 | FileCheck %s
+; RUN: llc < %s -asm-verbose=0 -mtriple=aarch64-eabi -mattr=+bf16 | FileCheck %s
 
 ; test argument passing and simple load/store
 
@@ -35,4 +35,11 @@ define void @test_vec_store(<4 x bfloat>* %a, <4 x bfloat> %b) nounwind {
 entry:
   store <4 x bfloat> %b, <4 x bfloat>* %a, align 16
   ret void
+}
+
+define <8 x bfloat> @test_build_vector_const() {
+; CHECK-LABEL: test_build_vector_const:
+; CHECK: mov [[TMP:w[0-9]+]], #16256
+; CHECK: dup v0.8h, [[TMP]]
+  ret  <8 x bfloat> <bfloat 0xR3F80, bfloat 0xR3F80, bfloat 0xR3F80, bfloat 0xR3F80, bfloat 0xR3F80, bfloat 0xR3F80, bfloat 0xR3F80, bfloat 0xR3F80>
 }

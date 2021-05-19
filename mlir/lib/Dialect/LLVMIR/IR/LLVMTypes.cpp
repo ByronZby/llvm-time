@@ -15,346 +15,450 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/TypeSupport.h"
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/TypeSize.h"
 
 using namespace mlir;
 using namespace mlir::LLVM;
 
 //===----------------------------------------------------------------------===//
-// LLVMType.
+// Array type.
 //===----------------------------------------------------------------------===//
 
-LLVMDialect &LLVMType::getDialect() {
-  return static_cast<LLVMDialect &>(Type::getDialect());
+bool LLVMArrayType::isValidElementType(Type type) {
+  return !type.isa<LLVMVoidType, LLVMLabelType, LLVMMetadataType,
+                   LLVMFunctionType, LLVMTokenType, LLVMScalableVectorType>();
 }
 
-//----------------------------------------------------------------------------//
-// Integer type utilities.
-
-bool LLVMType::isIntegerTy(unsigned bitwidth) {
-  if (auto intType = dyn_cast<LLVMIntegerType>())
-    return intType.getBitWidth() == bitwidth;
-  return false;
-}
-unsigned LLVMType::getIntegerBitWidth() {
-  return cast<LLVMIntegerType>().getBitWidth();
+LLVMArrayType LLVMArrayType::get(Type elementType, unsigned numElements) {
+  assert(elementType && "expected non-null subtype");
+  return Base::get(elementType.getContext(), elementType, numElements);
 }
 
-LLVMType LLVMType::getArrayElementType() {
-  return cast<LLVMArrayType>().getElementType();
+LLVMArrayType
+LLVMArrayType::getChecked(function_ref<InFlightDiagnostic()> emitError,
+                          Type elementType, unsigned numElements) {
+  assert(elementType && "expected non-null subtype");
+  return Base::getChecked(emitError, elementType.getContext(), elementType,
+                          numElements);
 }
 
-//----------------------------------------------------------------------------//
-// Array type utilities.
+Type LLVMArrayType::getElementType() { return getImpl()->elementType; }
 
-unsigned LLVMType::getArrayNumElements() {
-  return cast<LLVMArrayType>().getNumElements();
+unsigned LLVMArrayType::getNumElements() { return getImpl()->numElements; }
+
+LogicalResult
+LLVMArrayType::verify(function_ref<InFlightDiagnostic()> emitError,
+                      Type elementType, unsigned numElements) {
+  if (!isValidElementType(elementType))
+    return emitError() << "invalid array element type: " << elementType;
+  return success();
 }
 
-bool LLVMType::isArrayTy() { return isa<LLVMArrayType>(); }
+//===----------------------------------------------------------------------===//
+// Function type.
+//===----------------------------------------------------------------------===//
 
-//----------------------------------------------------------------------------//
-// Vector type utilities.
-
-LLVMType LLVMType::getVectorElementType() {
-  return cast<LLVMVectorType>().getElementType();
+bool LLVMFunctionType::isValidArgumentType(Type type) {
+  return !type.isa<LLVMVoidType, LLVMFunctionType>();
 }
 
-unsigned LLVMType::getVectorNumElements() {
-  return cast<LLVMFixedVectorType>().getNumElements();
-}
-llvm::ElementCount LLVMType::getVectorElementCount() {
-  return cast<LLVMVectorType>().getElementCount();
+bool LLVMFunctionType::isValidResultType(Type type) {
+  return !type.isa<LLVMFunctionType, LLVMMetadataType, LLVMLabelType>();
 }
 
-bool LLVMType::isVectorTy() { return isa<LLVMVectorType>(); }
-
-//----------------------------------------------------------------------------//
-// Function type utilities.
-
-LLVMType LLVMType::getFunctionParamType(unsigned argIdx) {
-  return cast<LLVMFunctionType>().getParamType(argIdx);
+LLVMFunctionType LLVMFunctionType::get(Type result, ArrayRef<Type> arguments,
+                                       bool isVarArg) {
+  assert(result && "expected non-null result");
+  return Base::get(result.getContext(), result, arguments, isVarArg);
 }
 
-unsigned LLVMType::getFunctionNumParams() {
-  return cast<LLVMFunctionType>().getNumParams();
+LLVMFunctionType
+LLVMFunctionType::getChecked(function_ref<InFlightDiagnostic()> emitError,
+                             Type result, ArrayRef<Type> arguments,
+                             bool isVarArg) {
+  assert(result && "expected non-null result");
+  return Base::getChecked(emitError, result.getContext(), result, arguments,
+                          isVarArg);
 }
 
-LLVMType LLVMType::getFunctionResultType() {
-  return cast<LLVMFunctionType>().getReturnType();
+Type LLVMFunctionType::getReturnType() { return getImpl()->getReturnType(); }
+
+unsigned LLVMFunctionType::getNumParams() {
+  return getImpl()->getArgumentTypes().size();
 }
 
-bool LLVMType::isFunctionTy() { return isa<LLVMFunctionType>(); }
-
-bool LLVMType::isFunctionVarArg() {
-  return cast<LLVMFunctionType>().isVarArg();
+Type LLVMFunctionType::getParamType(unsigned i) {
+  return getImpl()->getArgumentTypes()[i];
 }
 
-//----------------------------------------------------------------------------//
-// Pointer type utilities.
+bool LLVMFunctionType::isVarArg() { return getImpl()->isVariadic(); }
 
-LLVMType LLVMType::getPointerTo(unsigned addrSpace) {
-  return LLVMPointerType::get(*this, addrSpace);
+ArrayRef<Type> LLVMFunctionType::getParams() {
+  return getImpl()->getArgumentTypes();
 }
 
-LLVMType LLVMType::getPointerElementTy() {
-  return cast<LLVMPointerType>().getElementType();
+LogicalResult
+LLVMFunctionType::verify(function_ref<InFlightDiagnostic()> emitError,
+                         Type result, ArrayRef<Type> arguments, bool) {
+  if (!isValidResultType(result))
+    return emitError() << "invalid function result type: " << result;
+
+  for (Type arg : arguments)
+    if (!isValidArgumentType(arg))
+      return emitError() << "invalid function argument type: " << arg;
+
+  return success();
 }
 
-bool LLVMType::isPointerTy() { return isa<LLVMPointerType>(); }
+//===----------------------------------------------------------------------===//
+// Pointer type.
+//===----------------------------------------------------------------------===//
 
-bool LLVMType::isValidPointerElementType(LLVMType type) {
-  return !type.isa<LLVMVoidType>() && !type.isa<LLVMTokenType>() &&
-         !type.isa<LLVMMetadataType>() && !type.isa<LLVMLabelType>();
+bool LLVMPointerType::isValidElementType(Type type) {
+  return !type.isa<LLVMVoidType, LLVMTokenType, LLVMMetadataType,
+                   LLVMLabelType>();
 }
 
-//----------------------------------------------------------------------------//
-// Struct type utilities.
-
-LLVMType LLVMType::getStructElementType(unsigned i) {
-  return cast<LLVMStructType>().getBody()[i];
+LLVMPointerType LLVMPointerType::get(Type pointee, unsigned addressSpace) {
+  assert(pointee && "expected non-null subtype");
+  return Base::get(pointee.getContext(), pointee, addressSpace);
 }
 
-unsigned LLVMType::getStructNumElements() {
-  return cast<LLVMStructType>().getBody().size();
+LLVMPointerType
+LLVMPointerType::getChecked(function_ref<InFlightDiagnostic()> emitError,
+                            Type pointee, unsigned addressSpace) {
+  return Base::getChecked(emitError, pointee.getContext(), pointee,
+                          addressSpace);
 }
 
-bool LLVMType::isStructTy() { return isa<LLVMStructType>(); }
+Type LLVMPointerType::getElementType() { return getImpl()->pointeeType; }
 
-//----------------------------------------------------------------------------//
-// Utilities used to generate floating point types.
+unsigned LLVMPointerType::getAddressSpace() { return getImpl()->addressSpace; }
 
-LLVMType LLVMType::getDoubleTy(LLVMDialect *dialect) {
-  return LLVMDoubleType::get(dialect->getContext());
+LogicalResult
+LLVMPointerType::verify(function_ref<InFlightDiagnostic()> emitError,
+                        Type pointee, unsigned) {
+  if (!isValidElementType(pointee))
+    return emitError() << "invalid pointer element type: " << pointee;
+  return success();
 }
 
-LLVMType LLVMType::getFloatTy(LLVMDialect *dialect) {
-  return LLVMFloatType::get(dialect->getContext());
+//===----------------------------------------------------------------------===//
+// Struct type.
+//===----------------------------------------------------------------------===//
+
+bool LLVMStructType::isValidElementType(Type type) {
+  return !type.isa<LLVMVoidType, LLVMLabelType, LLVMMetadataType,
+                   LLVMFunctionType, LLVMTokenType, LLVMScalableVectorType>();
 }
 
-LLVMType LLVMType::getBFloatTy(LLVMDialect *dialect) {
-  return LLVMBFloatType::get(dialect->getContext());
+LLVMStructType LLVMStructType::getIdentified(MLIRContext *context,
+                                             StringRef name) {
+  return Base::get(context, name, /*opaque=*/false);
 }
 
-LLVMType LLVMType::getHalfTy(LLVMDialect *dialect) {
-  return LLVMHalfType::get(dialect->getContext());
+LLVMStructType LLVMStructType::getIdentifiedChecked(
+    function_ref<InFlightDiagnostic()> emitError, MLIRContext *context,
+    StringRef name) {
+  return Base::getChecked(emitError, context, name, /*opaque=*/false);
 }
 
-LLVMType LLVMType::getFP128Ty(LLVMDialect *dialect) {
-  return LLVMFP128Type::get(dialect->getContext());
-}
-
-LLVMType LLVMType::getX86_FP80Ty(LLVMDialect *dialect) {
-  return LLVMX86FP80Type::get(dialect->getContext());
-}
-
-//----------------------------------------------------------------------------//
-// Utilities used to generate integer types.
-
-LLVMType LLVMType::getIntNTy(LLVMDialect *dialect, unsigned numBits) {
-  return LLVMIntegerType::get(dialect->getContext(), numBits);
-}
-
-//----------------------------------------------------------------------------//
-// Utilities used to generate other miscellaneous types.
-
-LLVMType LLVMType::getArrayTy(LLVMType elementType, uint64_t numElements) {
-  return LLVMArrayType::get(elementType, numElements);
-}
-
-LLVMType LLVMType::getFunctionTy(LLVMType result, ArrayRef<LLVMType> params,
-                                 bool isVarArg) {
-  return LLVMFunctionType::get(result, params, isVarArg);
-}
-
-LLVMType LLVMType::getStructTy(LLVMDialect *dialect,
-                               ArrayRef<LLVMType> elements, bool isPacked) {
-  return LLVMStructType::getLiteral(dialect->getContext(), elements, isPacked);
-}
-
-LLVMType LLVMType::getVectorTy(LLVMType elementType, unsigned numElements) {
-  return LLVMFixedVectorType::get(elementType, numElements);
-}
-
-//----------------------------------------------------------------------------//
-// Void type utilities.
-
-LLVMType LLVMType::getVoidTy(LLVMDialect *dialect) {
-  return LLVMVoidType::get(dialect->getContext());
-}
-
-bool LLVMType::isVoidTy() { return isa<LLVMVoidType>(); }
-
-//----------------------------------------------------------------------------//
-// Creation and setting of LLVM's identified struct types
-
-LLVMType LLVMType::createStructTy(LLVMDialect *dialect,
-                                  ArrayRef<LLVMType> elements,
-                                  Optional<StringRef> name, bool isPacked) {
-  assert(name.hasValue() &&
-         "identified structs with no identifier not supported");
-  StringRef stringNameBase = name.getValueOr("");
-  std::string stringName = stringNameBase.str();
+LLVMStructType LLVMStructType::getNewIdentified(MLIRContext *context,
+                                                StringRef name,
+                                                ArrayRef<Type> elements,
+                                                bool isPacked) {
+  std::string stringName = name.str();
   unsigned counter = 0;
   do {
-    auto type =
-        LLVMStructType::getIdentified(dialect->getContext(), stringName);
+    auto type = LLVMStructType::getIdentified(context, stringName);
     if (type.isInitialized() || failed(type.setBody(elements, isPacked))) {
       counter += 1;
-      stringName =
-          (Twine(stringNameBase) + "." + std::to_string(counter)).str();
+      stringName = (Twine(name) + "." + std::to_string(counter)).str();
       continue;
     }
     return type;
   } while (true);
 }
 
-LLVMType LLVMType::setStructTyBody(LLVMType structType,
-                                   ArrayRef<LLVMType> elements, bool isPacked) {
-  LogicalResult couldSet =
-      structType.cast<LLVMStructType>().setBody(elements, isPacked);
-  assert(succeeded(couldSet) && "failed to set the body");
-  (void)couldSet;
-  return structType;
-}
-
-//===----------------------------------------------------------------------===//
-// Array type.
-
-LLVMArrayType LLVMArrayType::get(LLVMType elementType, unsigned numElements) {
-  assert(elementType && "expected non-null subtype");
-  return Base::get(elementType.getContext(), LLVMType::ArrayType, elementType,
-                   numElements);
-}
-
-LLVMType LLVMArrayType::getElementType() { return getImpl()->elementType; }
-
-unsigned LLVMArrayType::getNumElements() { return getImpl()->numElements; }
-
-//===----------------------------------------------------------------------===//
-// Function type.
-
-LLVMFunctionType LLVMFunctionType::get(LLVMType result,
-                                       ArrayRef<LLVMType> arguments,
-                                       bool isVarArg) {
-  assert(result && "expected non-null result");
-  return Base::get(result.getContext(), LLVMType::FunctionType, result,
-                   arguments, isVarArg);
-}
-
-LLVMType LLVMFunctionType::getReturnType() {
-  return getImpl()->getReturnType();
-}
-
-unsigned LLVMFunctionType::getNumParams() {
-  return getImpl()->getArgumentTypes().size();
-}
-
-LLVMType LLVMFunctionType::getParamType(unsigned i) {
-  return getImpl()->getArgumentTypes()[i];
-}
-
-bool LLVMFunctionType::isVarArg() { return getImpl()->isVariadic(); }
-
-ArrayRef<LLVMType> LLVMFunctionType::getParams() {
-  return getImpl()->getArgumentTypes();
-}
-
-//===----------------------------------------------------------------------===//
-// Integer type.
-
-LLVMIntegerType LLVMIntegerType::get(MLIRContext *ctx, unsigned bitwidth) {
-  return Base::get(ctx, LLVMType::IntegerType, bitwidth);
-}
-
-unsigned LLVMIntegerType::getBitWidth() { return getImpl()->bitwidth; }
-
-//===----------------------------------------------------------------------===//
-// Pointer type.
-
-LLVMPointerType LLVMPointerType::get(LLVMType pointee, unsigned addressSpace) {
-  assert(pointee && "expected non-null subtype");
-  return Base::get(pointee.getContext(), LLVMType::PointerType, pointee,
-                   addressSpace);
-}
-
-LLVMType LLVMPointerType::getElementType() { return getImpl()->pointeeType; }
-
-unsigned LLVMPointerType::getAddressSpace() { return getImpl()->addressSpace; }
-
-//===----------------------------------------------------------------------===//
-// Struct type.
-
-LLVMStructType LLVMStructType::getIdentified(MLIRContext *context,
-                                             StringRef name) {
-  return Base::get(context, LLVMType::StructType, name, /*opaque=*/false);
-}
-
 LLVMStructType LLVMStructType::getLiteral(MLIRContext *context,
-                                          ArrayRef<LLVMType> types,
-                                          bool isPacked) {
-  return Base::get(context, LLVMType::StructType, types, isPacked);
+                                          ArrayRef<Type> types, bool isPacked) {
+  return Base::get(context, types, isPacked);
+}
+
+LLVMStructType
+LLVMStructType::getLiteralChecked(function_ref<InFlightDiagnostic()> emitError,
+                                  MLIRContext *context, ArrayRef<Type> types,
+                                  bool isPacked) {
+  return Base::getChecked(emitError, context, types, isPacked);
 }
 
 LLVMStructType LLVMStructType::getOpaque(StringRef name, MLIRContext *context) {
-  return Base::get(context, LLVMType::StructType, name, /*opaque=*/true);
+  return Base::get(context, name, /*opaque=*/true);
 }
 
-LogicalResult LLVMStructType::setBody(ArrayRef<LLVMType> types, bool isPacked) {
+LLVMStructType
+LLVMStructType::getOpaqueChecked(function_ref<InFlightDiagnostic()> emitError,
+                                 MLIRContext *context, StringRef name) {
+  return Base::getChecked(emitError, context, name, /*opaque=*/true);
+}
+
+LogicalResult LLVMStructType::setBody(ArrayRef<Type> types, bool isPacked) {
   assert(isIdentified() && "can only set bodies of identified structs");
+  assert(llvm::all_of(types, LLVMStructType::isValidElementType) &&
+         "expected valid body types");
   return Base::mutate(types, isPacked);
 }
 
 bool LLVMStructType::isPacked() { return getImpl()->isPacked(); }
 bool LLVMStructType::isIdentified() { return getImpl()->isIdentified(); }
 bool LLVMStructType::isOpaque() {
-  return getImpl()->isOpaque() || !getImpl()->isInitialized();
+  return getImpl()->isIdentified() &&
+         (getImpl()->isOpaque() || !getImpl()->isInitialized());
 }
 bool LLVMStructType::isInitialized() { return getImpl()->isInitialized(); }
 StringRef LLVMStructType::getName() { return getImpl()->getIdentifier(); }
-ArrayRef<LLVMType> LLVMStructType::getBody() {
+ArrayRef<Type> LLVMStructType::getBody() {
   return isIdentified() ? getImpl()->getIdentifiedStructBody()
                         : getImpl()->getTypeList();
 }
 
+LogicalResult LLVMStructType::verify(function_ref<InFlightDiagnostic()>,
+                                     StringRef, bool) {
+  return success();
+}
+
+LogicalResult
+LLVMStructType::verify(function_ref<InFlightDiagnostic()> emitError,
+                       ArrayRef<Type> types, bool) {
+  for (Type t : types)
+    if (!isValidElementType(t))
+      return emitError() << "invalid LLVM structure element type: " << t;
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Vector types.
+//===----------------------------------------------------------------------===//
 
-LLVMType LLVMVectorType::getElementType() {
-  // Both derived classes share the implementation type.
-  return static_cast<detail::LLVMTypeAndSizeStorage *>(impl)->elementType;
+/// Verifies that the type about to be constructed is well-formed.
+template <typename VecTy>
+static LogicalResult
+verifyVectorConstructionInvariants(function_ref<InFlightDiagnostic()> emitError,
+                                   Type elementType, unsigned numElements) {
+  if (numElements == 0)
+    return emitError() << "the number of vector elements must be positive";
+
+  if (!VecTy::isValidElementType(elementType))
+    return emitError() << "invalid vector element type";
+
+  return success();
 }
 
-llvm::ElementCount LLVMVectorType::getElementCount() {
-  // Both derived classes share the implementation type.
-  return llvm::ElementCount(
-      static_cast<detail::LLVMTypeAndSizeStorage *>(impl)->numElements,
-      this->isa<LLVMScalableVectorType>());
-}
-
-LLVMFixedVectorType LLVMFixedVectorType::get(LLVMType elementType,
+LLVMFixedVectorType LLVMFixedVectorType::get(Type elementType,
                                              unsigned numElements) {
   assert(elementType && "expected non-null subtype");
-  return Base::get(elementType.getContext(), LLVMType::FixedVectorType,
-                   elementType, numElements)
-      .cast<LLVMFixedVectorType>();
+  return Base::get(elementType.getContext(), elementType, numElements);
+}
+
+LLVMFixedVectorType
+LLVMFixedVectorType::getChecked(function_ref<InFlightDiagnostic()> emitError,
+                                Type elementType, unsigned numElements) {
+  assert(elementType && "expected non-null subtype");
+  return Base::getChecked(emitError, elementType.getContext(), elementType,
+                          numElements);
+}
+
+Type LLVMFixedVectorType::getElementType() {
+  return static_cast<detail::LLVMTypeAndSizeStorage *>(impl)->elementType;
 }
 
 unsigned LLVMFixedVectorType::getNumElements() {
   return getImpl()->numElements;
 }
 
-LLVMScalableVectorType LLVMScalableVectorType::get(LLVMType elementType,
+bool LLVMFixedVectorType::isValidElementType(Type type) {
+  return type.isa<LLVMPointerType, LLVMPPCFP128Type>();
+}
+
+LogicalResult
+LLVMFixedVectorType::verify(function_ref<InFlightDiagnostic()> emitError,
+                            Type elementType, unsigned numElements) {
+  return verifyVectorConstructionInvariants<LLVMFixedVectorType>(
+      emitError, elementType, numElements);
+}
+
+//===----------------------------------------------------------------------===//
+// LLVMScalableVectorType.
+//===----------------------------------------------------------------------===//
+
+LLVMScalableVectorType LLVMScalableVectorType::get(Type elementType,
                                                    unsigned minNumElements) {
   assert(elementType && "expected non-null subtype");
-  return Base::get(elementType.getContext(), LLVMType::ScalableVectorType,
-                   elementType, minNumElements)
-      .cast<LLVMScalableVectorType>();
+  return Base::get(elementType.getContext(), elementType, minNumElements);
+}
+
+LLVMScalableVectorType
+LLVMScalableVectorType::getChecked(function_ref<InFlightDiagnostic()> emitError,
+                                   Type elementType, unsigned minNumElements) {
+  assert(elementType && "expected non-null subtype");
+  return Base::getChecked(emitError, elementType.getContext(), elementType,
+                          minNumElements);
+}
+
+Type LLVMScalableVectorType::getElementType() {
+  return static_cast<detail::LLVMTypeAndSizeStorage *>(impl)->elementType;
 }
 
 unsigned LLVMScalableVectorType::getMinNumElements() {
   return getImpl()->numElements;
+}
+
+bool LLVMScalableVectorType::isValidElementType(Type type) {
+  if (auto intType = type.dyn_cast<IntegerType>())
+    return intType.isSignless();
+
+  return isCompatibleFloatingPointType(type) || type.isa<LLVMPointerType>();
+}
+
+LogicalResult
+LLVMScalableVectorType::verify(function_ref<InFlightDiagnostic()> emitError,
+                               Type elementType, unsigned numElements) {
+  return verifyVectorConstructionInvariants<LLVMScalableVectorType>(
+      emitError, elementType, numElements);
+}
+
+//===----------------------------------------------------------------------===//
+// Utility functions.
+//===----------------------------------------------------------------------===//
+
+bool mlir::LLVM::isCompatibleType(Type type) {
+  // Only signless integers are compatible.
+  if (auto intType = type.dyn_cast<IntegerType>())
+    return intType.isSignless();
+
+  // 1D vector types are compatible if their element types are.
+  if (auto vecType = type.dyn_cast<VectorType>())
+    return vecType.getRank() == 1 && isCompatibleType(vecType.getElementType());
+
+  // clang-format off
+  return type.isa<
+      BFloat16Type,
+      Float16Type,
+      Float32Type,
+      Float64Type,
+      Float80Type,
+      Float128Type,
+      LLVMArrayType,
+      LLVMFunctionType,
+      LLVMLabelType,
+      LLVMMetadataType,
+      LLVMPPCFP128Type,
+      LLVMPointerType,
+      LLVMStructType,
+      LLVMTokenType,
+      LLVMFixedVectorType,
+      LLVMScalableVectorType,
+      LLVMVoidType,
+      LLVMX86MMXType
+  >();
+  // clang-format on
+}
+
+bool mlir::LLVM::isCompatibleFloatingPointType(Type type) {
+  return type.isa<BFloat16Type, Float16Type, Float32Type, Float64Type,
+                  Float80Type, Float128Type, LLVMPPCFP128Type>();
+}
+
+bool mlir::LLVM::isCompatibleVectorType(Type type) {
+  if (type.isa<LLVMFixedVectorType, LLVMScalableVectorType>())
+    return true;
+
+  if (auto vecType = type.dyn_cast<VectorType>()) {
+    if (vecType.getRank() != 1)
+      return false;
+    Type elementType = vecType.getElementType();
+    if (auto intType = elementType.dyn_cast<IntegerType>())
+      return intType.isSignless();
+    return elementType.isa<BFloat16Type, Float16Type, Float32Type, Float64Type,
+                           Float80Type, Float128Type>();
+  }
+  return false;
+}
+
+Type mlir::LLVM::getVectorElementType(Type type) {
+  return llvm::TypeSwitch<Type, Type>(type)
+      .Case<LLVMFixedVectorType, LLVMScalableVectorType, VectorType>(
+          [](auto ty) { return ty.getElementType(); })
+      .Default([](Type) -> Type {
+        llvm_unreachable("incompatible with LLVM vector type");
+      });
+}
+
+llvm::ElementCount mlir::LLVM::getVectorNumElements(Type type) {
+  return llvm::TypeSwitch<Type, llvm::ElementCount>(type)
+      .Case<LLVMFixedVectorType, VectorType>([](auto ty) {
+        return llvm::ElementCount::getFixed(ty.getNumElements());
+      })
+      .Case([](LLVMScalableVectorType ty) {
+        return llvm::ElementCount::getScalable(ty.getMinNumElements());
+      })
+      .Default([](Type) -> llvm::ElementCount {
+        llvm_unreachable("incompatible with LLVM vector type");
+      });
+}
+
+Type mlir::LLVM::getFixedVectorType(Type elementType, unsigned numElements) {
+  bool useLLVM = LLVMFixedVectorType::isValidElementType(elementType);
+  bool useBuiltIn = VectorType::isValidElementType(elementType);
+  (void)useBuiltIn;
+  assert((useLLVM ^ useBuiltIn) && "expected LLVM-compatible fixed-vector type "
+                                   "to be either builtin or LLVM dialect type");
+  if (useLLVM)
+    return LLVMFixedVectorType::get(elementType, numElements);
+  return VectorType::get(numElements, elementType);
+}
+
+llvm::TypeSize mlir::LLVM::getPrimitiveTypeSizeInBits(Type type) {
+  assert(isCompatibleType(type) &&
+         "expected a type compatible with the LLVM dialect");
+
+  return llvm::TypeSwitch<Type, llvm::TypeSize>(type)
+      .Case<BFloat16Type, Float16Type>(
+          [](Type) { return llvm::TypeSize::Fixed(16); })
+      .Case<Float32Type>([](Type) { return llvm::TypeSize::Fixed(32); })
+      .Case<Float64Type, LLVMX86MMXType>(
+          [](Type) { return llvm::TypeSize::Fixed(64); })
+      .Case<Float80Type>([](Type) { return llvm::TypeSize::Fixed(80); })
+      .Case<Float128Type>([](Type) { return llvm::TypeSize::Fixed(128); })
+      .Case<IntegerType>([](IntegerType intTy) {
+        return llvm::TypeSize::Fixed(intTy.getWidth());
+      })
+      .Case<LLVMPPCFP128Type>([](Type) { return llvm::TypeSize::Fixed(128); })
+      .Case<LLVMFixedVectorType>([](LLVMFixedVectorType t) {
+        llvm::TypeSize elementSize =
+            getPrimitiveTypeSizeInBits(t.getElementType());
+        return llvm::TypeSize(elementSize.getFixedSize() * t.getNumElements(),
+                              elementSize.isScalable());
+      })
+      .Case<VectorType>([](VectorType t) {
+        assert(isCompatibleVectorType(t) &&
+               "unexpected incompatible with LLVM vector type");
+        llvm::TypeSize elementSize =
+            getPrimitiveTypeSizeInBits(t.getElementType());
+        return llvm::TypeSize(elementSize.getFixedSize() * t.getNumElements(),
+                              elementSize.isScalable());
+      })
+      .Default([](Type ty) {
+        assert((ty.isa<LLVMVoidType, LLVMLabelType, LLVMMetadataType,
+                       LLVMTokenType, LLVMStructType, LLVMArrayType,
+                       LLVMPointerType, LLVMFunctionType>()) &&
+               "unexpected missing support for primitive type");
+        return llvm::TypeSize::Fixed(0);
+      });
 }

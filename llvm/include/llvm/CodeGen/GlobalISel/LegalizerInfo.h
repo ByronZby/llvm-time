@@ -5,10 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
+/// \file
 /// Interface for Targets to specify which operations they can successfully
 /// select and how the others should be expanded most efficiently.
-//
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CODEGEN_GLOBALISEL_LEGALIZERINFO_H
@@ -37,7 +37,6 @@ extern cl::opt<bool> DisableGISelLegalityCheck;
 
 class LegalizerHelper;
 class MachineInstr;
-class MachineIRBuilder;
 class MachineRegisterInfo;
 class MCInstrInfo;
 class GISelChangeObserver;
@@ -183,7 +182,7 @@ struct TypePairAndMemDesc {
            MemSize == Other.MemSize;
   }
 
-  /// \returns true if this memory access is legal with for the acecss described
+  /// \returns true if this memory access is legal with for the access described
   /// by \p Other (The alignment is sufficient for the size and result type).
   bool isCompatible(const TypePairAndMemDesc &Other) const {
     return Type0 == Other.Type0 && Type1 == Other.Type1 &&
@@ -629,8 +628,7 @@ public:
   /// The instruction is lowered when type index 0 is any type in the given
   /// list. Keep type index 0 as the same type.
   LegalizeRuleSet &lowerFor(std::initializer_list<LLT> Types) {
-    return actionFor(LegalizeAction::Lower, Types,
-                     LegalizeMutations::changeTo(0, 0));
+    return actionFor(LegalizeAction::Lower, Types);
   }
   /// The instruction is lowered when type index 0 is any type in the given
   /// list.
@@ -641,8 +639,7 @@ public:
   /// The instruction is lowered when type indexes 0 and 1 is any type pair in
   /// the given list. Keep type index 0 as the same type.
   LegalizeRuleSet &lowerFor(std::initializer_list<std::pair<LLT, LLT>> Types) {
-    return actionFor(LegalizeAction::Lower, Types,
-                     LegalizeMutations::changeTo(0, 0));
+    return actionFor(LegalizeAction::Lower, Types);
   }
   /// The instruction is lowered when type indexes 0 and 1 is any type pair in
   /// the given list.
@@ -829,6 +826,13 @@ public:
                     LegalizeMutations::scalarize(TypeIdx));
   }
 
+  LegalizeRuleSet &scalarizeIf(LegalityPredicate Predicate, unsigned TypeIdx) {
+    using namespace LegalityPredicates;
+    return actionIf(LegalizeAction::FewerElements,
+                    all(Predicate, isVector(typeIdx(TypeIdx))),
+                    LegalizeMutations::scalarize(TypeIdx));
+  }
+
   /// Ensure the scalar or element is at least as wide as Ty.
   LegalizeRuleSet &minScalarOrElt(unsigned TypeIdx, const LLT Ty) {
     using namespace LegalityPredicates;
@@ -948,6 +952,23 @@ public:
         },
         [=](const LegalityQuery &Query) {
           LLT T = Query.Types[LargeTypeIdx];
+          return std::make_pair(TypeIdx, T);
+        });
+  }
+
+  /// Conditionally narrow the scalar or elt to match the size of another.
+  LegalizeRuleSet &maxScalarEltSameAsIf(LegalityPredicate Predicate,
+                                        unsigned TypeIdx,
+                                        unsigned SmallTypeIdx) {
+    typeIdx(TypeIdx);
+    return narrowScalarIf(
+        [=](const LegalityQuery &Query) {
+          return Query.Types[SmallTypeIdx].getScalarSizeInBits() <
+                     Query.Types[TypeIdx].getScalarSizeInBits() &&
+                 Predicate(Query);
+        },
+        [=](const LegalityQuery &Query) {
+          LLT T = Query.Types[SmallTypeIdx];
           return std::make_pair(TypeIdx, T);
         });
   }

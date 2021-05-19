@@ -78,9 +78,9 @@ def : SysReg<"uip", 0x044>;
 // User Floating-Point CSRs
 //===--------------------------
 
-def FFLAGS : SysReg<"fflags", 0x001>;
-def FRM    : SysReg<"frm", 0x002>;
-def FCSR   : SysReg<"fcsr", 0x003>;
+def SysRegFFLAGS : SysReg<"fflags", 0x001>;
+def SysRegFRM    : SysReg<"frm", 0x002>;
+def SysRegFCSR   : SysReg<"fcsr", 0x003>;
 
 //===--------------------------
 // User Counter/Timers
@@ -310,7 +310,9 @@ def: SysReg<"mhpmcounter31h", 0xB9F>;
 //===--------------------------
 // Machine Counter Setup
 //===--------------------------
+let AltName = "mucounteren" in // Privileged spec v1.9.1 Name
 def : SysReg<"mcountinhibit", 0x320>;
+
 def : SysReg<"mhpmevent3", 0x323>;
 def : SysReg<"mhpmevent4", 0x324>;
 def : SysReg<"mhpmevent5", 0x325>;

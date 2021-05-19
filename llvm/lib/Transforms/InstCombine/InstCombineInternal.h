@@ -97,9 +97,7 @@ public:
   Instruction *visitSRem(BinaryOperator &I);
   Instruction *visitFRem(BinaryOperator &I);
   bool simplifyDivRemOfSelectWithZeroOp(BinaryOperator &I);
-  Instruction *commonRemTransforms(BinaryOperator &I);
   Instruction *commonIRemTransforms(BinaryOperator &I);
-  Instruction *commonDivTransforms(BinaryOperator &I);
   Instruction *commonIDivTransforms(BinaryOperator &I);
   Instruction *visitUDiv(BinaryOperator &I);
   Instruction *visitSDiv(BinaryOperator &I);
@@ -107,6 +105,7 @@ public:
   Value *simplifyRangeCheck(ICmpInst *Cmp0, ICmpInst *Cmp1, bool Inverted);
   Instruction *visitAnd(BinaryOperator &I);
   Instruction *visitOr(BinaryOperator &I);
+  bool sinkNotIntoOtherHandOfAndOrOr(BinaryOperator &I);
   Instruction *visitXor(BinaryOperator &I);
   Instruction *visitShl(BinaryOperator &I);
   Value *reassociateShiftAmtsOfTwoSameDirectionShifts(
@@ -120,6 +119,7 @@ public:
   Instruction *visitLShr(BinaryOperator &I);
   Instruction *commonShiftTransforms(BinaryOperator &I);
   Instruction *visitFCmpInst(FCmpInst &I);
+  CmpInst *canonicalizeICmpPredicate(CmpInst &I);
   Instruction *visitICmpInst(ICmpInst &I);
   Instruction *FoldShiftByConstant(Value *Op0, Constant *Op1,
                                    BinaryOperator &I);
@@ -158,6 +158,9 @@ public:
   Instruction *visitFenceInst(FenceInst &FI);
   Instruction *visitSwitchInst(SwitchInst &SI);
   Instruction *visitReturnInst(ReturnInst &RI);
+  Instruction *visitUnreachableInst(UnreachableInst &I);
+  Instruction *
+  foldAggregateConstructionIntoAggregateReuse(InsertValueInst &OrigIVI);
   Instruction *visitInsertValueInst(InsertValueInst &IV);
   Instruction *visitInsertElementInst(InsertElementInst &IE);
   Instruction *visitExtractElementInst(ExtractElementInst &EI);
@@ -180,15 +183,11 @@ public:
   bool replacedSelectWithOperand(SelectInst *SI, const ICmpInst *Icmp,
                                  const unsigned SIOpd);
 
-  /// Try to replace instruction \p I with value \p V which are pointers
-  /// in different address space.
-  /// \return true if successful.
-  bool replacePointer(Instruction &I, Value *V);
-
   LoadInst *combineLoadToNewType(LoadInst &LI, Type *NewTy,
                                  const Twine &Suffix = "");
 
 private:
+  void annotateAnyAllocSite(CallBase &Call, const TargetLibraryInfo *TLI);
   bool shouldChangeType(unsigned FromBitWidth, unsigned ToBitWidth) const;
   bool shouldChangeType(Type *From, Type *To) const;
   Value *dyn_castNegVal(Value *V) const;
@@ -322,9 +321,11 @@ private:
   Instruction *narrowBinOp(TruncInst &Trunc);
   Instruction *narrowMaskedBinOp(BinaryOperator &And);
   Instruction *narrowMathIfNoOverflow(BinaryOperator &I);
-  Instruction *narrowRotate(TruncInst &Trunc);
+  Instruction *narrowFunnelShift(TruncInst &Trunc);
   Instruction *optimizeBitCastFromPhi(CastInst &CI, PHINode *PN);
   Instruction *matchSAddSubSat(SelectInst &MinMax1);
+
+  void freelyInvertAllUsersOf(Value *V);
 
   /// Determine if a pair of casts can be replaced by a single cast.
   ///
@@ -349,12 +350,20 @@ private:
   Value *foldLogicOfFCmps(FCmpInst *LHS, FCmpInst *RHS, bool IsAnd);
 
   Value *foldAndOrOfICmpsOfAndWithPow2(ICmpInst *LHS, ICmpInst *RHS,
-                                       BinaryOperator &Logic);
+                                       Instruction *CxtI, bool IsAnd,
+                                       bool IsLogical = false);
   Value *matchSelectFromAndOr(Value *A, Value *B, Value *C, Value *D);
   Value *getSelectCondition(Value *A, Value *B);
 
   Instruction *foldIntrinsicWithOverflowCommon(IntrinsicInst *II);
   Instruction *foldFPSignBitOps(BinaryOperator &I);
+
+  // Optimize one of these forms:
+  //   and i1 Op, SI / select i1 Op, i1 SI, i1 false (if IsAnd = true)
+  //   or i1 Op, SI  / select i1 Op, i1 true, i1 SI  (if IsAnd = false)
+  // into simplier select instruction using isImpliedCondition.
+  Instruction *foldAndOrOfSelectUsingImpliedCond(Value *Op, SelectInst &SI,
+                                                 bool IsAnd);
 
 public:
   /// Inserts an instruction \p New before instruction \p Old
@@ -398,6 +407,7 @@ public:
                       << "    with " << *V << '\n');
 
     I.replaceAllUsesWith(V);
+    MadeIRChange = true;
     return &I;
   }
 
@@ -613,16 +623,18 @@ public:
 
   /// Try to rotate an operation below a PHI node, using PHI nodes for
   /// its operands.
-  Instruction *FoldPHIArgOpIntoPHI(PHINode &PN);
-  Instruction *FoldPHIArgBinOpIntoPHI(PHINode &PN);
-  Instruction *FoldPHIArgGEPIntoPHI(PHINode &PN);
-  Instruction *FoldPHIArgLoadIntoPHI(PHINode &PN);
-  Instruction *FoldPHIArgZextsIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgOpIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgBinOpIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgInsertValueInstructionIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgExtractValueInstructionIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgGEPIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgLoadIntoPHI(PHINode &PN);
+  Instruction *foldPHIArgZextsIntoPHI(PHINode &PN);
 
   /// If an integer typed PHI has only one use which is an IntToPtr operation,
   /// replace the PHI with an existing pointer typed PHI if it exists. Otherwise
   /// insert a new pointer typed PHI and replace the original one.
-  Instruction *FoldIntegerTypedPHI(PHINode &PN);
+  Instruction *foldIntegerTypedPHI(PHINode &PN);
 
   /// Helper function for FoldPHIArgXIntoPHI() to set debug location for the
   /// folded operation.
@@ -705,18 +717,18 @@ public:
                             Value *A, Value *B, Instruction &Outer,
                             SelectPatternFlavor SPF2, Value *C);
   Instruction *foldSelectInstWithICmp(SelectInst &SI, ICmpInst *ICI);
-
-  Instruction *OptAndOp(BinaryOperator *Op, ConstantInt *OpRHS,
-                        ConstantInt *AndRHS, BinaryOperator &TheAnd);
+  Instruction *foldSelectValueEquivalence(SelectInst &SI, ICmpInst &ICI);
 
   Value *insertRangeTest(Value *V, const APInt &Lo, const APInt &Hi,
                          bool isSigned, bool Inside);
   Instruction *PromoteCastOfAllocation(BitCastInst &CI, AllocaInst &AI);
   bool mergeStoreIntoSuccessor(StoreInst &SI);
 
-  /// Given an 'or' instruction, check to see if it is part of a bswap idiom.
-  /// If so, return the equivalent bswap intrinsic.
-  Instruction *matchBSwap(BinaryOperator &Or);
+  /// Given an initial instruction, check to see if it is the root of a
+  /// bswap/bitreverse idiom. If so, return the equivalent bswap/bitreverse
+  /// intrinsic.
+  Instruction *matchBSwapOrBitReverse(Instruction &I, bool MatchBSwaps,
+                                      bool MatchBitReversals);
 
   Instruction *SimplifyAnyMemTransfer(AnyMemTransferInst *MI);
   Instruction *SimplifyAnyMemSet(AnyMemSetInst *MI);
@@ -754,6 +766,8 @@ class Negator final {
 
   using Result = std::pair<ArrayRef<Instruction *> /*NewInstructions*/,
                            Value * /*NegatedRoot*/>;
+
+  std::array<Value *, 2> getSortedOperandsOfBinOp(Instruction *I);
 
   LLVM_NODISCARD Value *visitImpl(Value *V, unsigned Depth);
 

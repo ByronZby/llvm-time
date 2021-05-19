@@ -17,6 +17,7 @@
 #include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Host.h"
+#include "llvm/Support/MemoryBuffer.h"
 
 using namespace llvm;
 
@@ -52,12 +53,13 @@ CGOPT(ThreadModel::Model, ThreadModel)
 CGOPT_EXP(CodeModel::Model, CodeModel)
 CGOPT(ExceptionHandling, ExceptionModel)
 CGOPT_EXP(CodeGenFileType, FileType)
-CGOPT(FramePointer::FP, FramePointerUsage)
+CGOPT(FramePointerKind, FramePointerUsage)
 CGOPT(bool, EnableUnsafeFPMath)
 CGOPT(bool, EnableNoInfsFPMath)
 CGOPT(bool, EnableNoNaNsFPMath)
 CGOPT(bool, EnableNoSignedZerosFPMath)
 CGOPT(bool, EnableNoTrappingFPMath)
+CGOPT(bool, EnableAIXExtendedAltivecABI)
 CGOPT(DenormalMode::DenormalModeKind, DenormalFPMath)
 CGOPT(DenormalMode::DenormalModeKind, DenormalFP32Math)
 CGOPT(bool, EnableHonorSignDependentRoundingFPMath)
@@ -74,7 +76,12 @@ CGOPT(bool, UseCtors)
 CGOPT(bool, RelaxELFRelocations)
 CGOPT_EXP(bool, DataSections)
 CGOPT_EXP(bool, FunctionSections)
+CGOPT(bool, IgnoreXCOFFVisibility)
+CGOPT(bool, XCOFFTracebackTable)
 CGOPT(std::string, BBSections)
+CGOPT(std::string, StackProtectorGuard)
+CGOPT(int, StackProtectorGuardOffset)
+CGOPT(std::string, StackProtectorGuardReg)
 CGOPT(unsigned, TLSSize)
 CGOPT(bool, EmulatedTLS)
 CGOPT(bool, UniqueSectionNames)
@@ -84,9 +91,13 @@ CGOPT(DebuggerKind, DebuggerTuningOpt)
 CGOPT(bool, EnableStackSizeSection)
 CGOPT(bool, EnableAddrsig)
 CGOPT(bool, EmitCallSiteInfo)
+CGOPT(bool, EnableMachineFunctionSplitter)
 CGOPT(bool, EnableDebugEntryValues)
+CGOPT(bool, PseudoProbeForProfiling)
+CGOPT(bool, ValueTrackingVariableLocations)
 CGOPT(bool, ForceDwarfFrameSection)
 CGOPT(bool, XRayOmitFunctionIndex)
+CGOPT(bool, DebugStrictDwarf)
 
 codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
 #define CGBINDOPT(NAME)                                                        \
@@ -173,16 +184,16 @@ codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
                      "Emit nothing, for performance testing")));
   CGBINDOPT(FileType);
 
-  static cl::opt<FramePointer::FP> FramePointerUsage(
+  static cl::opt<FramePointerKind> FramePointerUsage(
       "frame-pointer",
       cl::desc("Specify frame pointer elimination optimization"),
-      cl::init(FramePointer::None),
+      cl::init(FramePointerKind::None),
       cl::values(
-          clEnumValN(FramePointer::All, "all",
+          clEnumValN(FramePointerKind::All, "all",
                      "Disable frame pointer elimination"),
-          clEnumValN(FramePointer::NonLeaf, "non-leaf",
+          clEnumValN(FramePointerKind::NonLeaf, "non-leaf",
                      "Disable frame pointer elimination for non-leaf frame"),
-          clEnumValN(FramePointer::None, "none",
+          clEnumValN(FramePointerKind::None, "none",
                      "Enable frame pointer elimination")));
   CGBINDOPT(FramePointerUsage);
 
@@ -276,6 +287,11 @@ codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
       cl::init(false));
   CGBINDOPT(DontPlaceZerosInBSS);
 
+  static cl::opt<bool> EnableAIXExtendedAltivecABI(
+      "vec-extabi", cl::desc("Enable the AIX Extended Altivec ABI."),
+      cl::init(false));
+  CGBINDOPT(EnableAIXExtendedAltivecABI);
+
   static cl::opt<bool> EnableGuaranteedTailCallOpt(
       "tailcallopt",
       cl::desc(
@@ -331,12 +347,39 @@ codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
       cl::init(false));
   CGBINDOPT(FunctionSections);
 
+  static cl::opt<bool> IgnoreXCOFFVisibility(
+      "ignore-xcoff-visibility",
+      cl::desc("Not emit the visibility attribute for asm in AIX OS or give "
+               "all symbols 'unspecified' visibility in XCOFF object file"),
+      cl::init(false));
+  CGBINDOPT(IgnoreXCOFFVisibility);
+
+  static cl::opt<bool> XCOFFTracebackTable(
+      "xcoff-traceback-table", cl::desc("Emit the XCOFF traceback table"),
+      cl::init(true));
+  CGBINDOPT(XCOFFTracebackTable);
+
   static cl::opt<std::string> BBSections(
       "basic-block-sections",
       cl::desc("Emit basic blocks into separate sections"),
       cl::value_desc("all | <function list (file)> | labels | none"),
       cl::init("none"));
   CGBINDOPT(BBSections);
+
+  static cl::opt<std::string> StackProtectorGuard(
+      "stack-protector-guard", cl::desc("Stack protector guard mode"),
+      cl::init("none"));
+  CGBINDOPT(StackProtectorGuard);
+
+  static cl::opt<std::string> StackProtectorGuardReg(
+      "stack-protector-guard-reg", cl::desc("Stack protector guard register"),
+      cl::init("none"));
+  CGBINDOPT(StackProtectorGuardReg);
+
+  static cl::opt<int> StackProtectorGuardOffset(
+      "stack-protector-guard-offset", cl::desc("Stack protector guard offset"),
+      cl::init(INT_MAX));
+  CGBINDOPT(StackProtectorGuardOffset);
 
   static cl::opt<unsigned> TLSSize(
       "tls-size", cl::desc("Bit size of immediate TLS offsets"), cl::init(0));
@@ -373,6 +416,7 @@ codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
       cl::values(
           clEnumValN(DebuggerKind::GDB, "gdb", "gdb"),
           clEnumValN(DebuggerKind::LLDB, "lldb", "lldb"),
+          clEnumValN(DebuggerKind::DBX, "dbx", "dbx"),
           clEnumValN(DebuggerKind::SCE, "sce", "SCE targets (e.g. PS4)")));
   CGBINDOPT(DebuggerTuningOpt);
 
@@ -400,6 +444,24 @@ codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
       cl::init(false));
   CGBINDOPT(EnableDebugEntryValues);
 
+  static cl::opt<bool> PseudoProbeForProfiling(
+      "pseudo-probe-for-profiling", cl::desc("Emit pseudo probes for AutoFDO"),
+      cl::init(false));
+  CGBINDOPT(PseudoProbeForProfiling);
+
+  static cl::opt<bool> ValueTrackingVariableLocations(
+      "experimental-debug-variable-locations",
+      cl::desc("Use experimental new value-tracking variable locations"),
+      cl::init(false));
+  CGBINDOPT(ValueTrackingVariableLocations);
+
+  static cl::opt<bool> EnableMachineFunctionSplitter(
+      "split-machine-functions",
+      cl::desc("Split out cold basic blocks from machine functions based on "
+               "profile information"),
+      cl::init(false));
+  CGBINDOPT(EnableMachineFunctionSplitter);
+
   static cl::opt<bool> ForceDwarfFrameSection(
       "force-dwarf-frame-section",
       cl::desc("Always emit a debug frame section."), cl::init(false));
@@ -409,6 +471,10 @@ codegen::RegisterCodeGenFlags::RegisterCodeGenFlags() {
       "no-xray-index", cl::desc("Don't emit xray_fn_idx section"),
       cl::init(false));
   CGBINDOPT(XRayOmitFunctionIndex);
+
+  static cl::opt<bool> DebugStrictDwarf(
+      "strict-dwarf", cl::desc("use strict dwarf"), cl::init(false));
+  CGBINDOPT(DebugStrictDwarf);
 
 #undef CGBINDOPT
 
@@ -436,9 +502,30 @@ codegen::getBBSectionsMode(llvm::TargetOptions &Options) {
   }
 }
 
+llvm::StackProtectorGuards
+codegen::getStackProtectorGuardMode(llvm::TargetOptions &Options) {
+  if (getStackProtectorGuard() == "tls")
+    return StackProtectorGuards::TLS;
+  if (getStackProtectorGuard() == "global")
+    return StackProtectorGuards::Global;
+  if (getStackProtectorGuard() == "sysreg")
+    return StackProtectorGuards::SysReg;
+  if (getStackProtectorGuard() != "none") {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> MBOrErr =
+        MemoryBuffer::getFile(getStackProtectorGuard());
+    if (!MBOrErr)
+      errs() << "error illegal stack protector guard mode: "
+             << MBOrErr.getError().message() << "\n";
+    else
+      Options.BBSectionsFuncListBuf = std::move(*MBOrErr);
+  }
+  return StackProtectorGuards::None;
+}
+
 // Common utility function tightly tied to the options listed here. Initializes
 // a TargetOptions object with CodeGen flags and returns it.
-TargetOptions codegen::InitTargetOptionsFromCodeGenFlags() {
+TargetOptions
+codegen::InitTargetOptionsFromCodeGenFlags(const Triple &TheTriple) {
   TargetOptions Options;
   Options.AllowFPOpFusion = getFuseFPOps();
   Options.UnsafeFPMath = getEnableUnsafeFPMath();
@@ -456,27 +543,38 @@ TargetOptions codegen::InitTargetOptionsFromCodeGenFlags() {
       getEnableHonorSignDependentRoundingFPMath();
   if (getFloatABIForCalls() != FloatABI::Default)
     Options.FloatABIType = getFloatABIForCalls();
+  Options.EnableAIXExtendedAltivecABI = getEnableAIXExtendedAltivecABI();
   Options.NoZerosInBSS = getDontPlaceZerosInBSS();
   Options.GuaranteedTailCallOpt = getEnableGuaranteedTailCallOpt();
   Options.StackAlignmentOverride = getOverrideStackAlignment();
   Options.StackSymbolOrdering = getStackSymbolOrdering();
   Options.UseInitArray = !getUseCtors();
   Options.RelaxELFRelocations = getRelaxELFRelocations();
-  Options.DataSections = getDataSections();
+  Options.DataSections =
+      getExplicitDataSections().getValueOr(TheTriple.hasDefaultDataSections());
   Options.FunctionSections = getFunctionSections();
+  Options.IgnoreXCOFFVisibility = getIgnoreXCOFFVisibility();
+  Options.XCOFFTracebackTable = getXCOFFTracebackTable();
   Options.BBSections = getBBSectionsMode(Options);
   Options.UniqueSectionNames = getUniqueSectionNames();
   Options.UniqueBasicBlockSectionNames = getUniqueBasicBlockSectionNames();
+  Options.StackProtectorGuard = getStackProtectorGuardMode(Options);
+  Options.StackProtectorGuardOffset = getStackProtectorGuardOffset();
+  Options.StackProtectorGuardReg = getStackProtectorGuardReg();
   Options.TLSSize = getTLSSize();
   Options.EmulatedTLS = getEmulatedTLS();
   Options.ExplicitEmulatedTLS = EmulatedTLSView->getNumOccurrences() > 0;
   Options.ExceptionModel = getExceptionModel();
   Options.EmitStackSizeSection = getEnableStackSizeSection();
+  Options.EnableMachineFunctionSplitter = getEnableMachineFunctionSplitter();
   Options.EmitAddrsig = getEnableAddrsig();
   Options.EmitCallSiteInfo = getEmitCallSiteInfo();
   Options.EnableDebugEntryValues = getEnableDebugEntryValues();
+  Options.PseudoProbeForProfiling = getPseudoProbeForProfiling();
+  Options.ValueTrackingVariableLocations = getValueTrackingVariableLocations();
   Options.ForceDwarfFrameSection = getForceDwarfFrameSection();
   Options.XRayOmitFunctionIndex = getXRayOmitFunctionIndex();
+  Options.DebugStrictDwarf = getDebugStrictDwarf();
 
   Options.MCOptions = mc::InitMCTargetOptionsFromFlags();
 
@@ -572,11 +670,11 @@ void codegen::setFunctionAttributes(StringRef CPU, StringRef Features,
   }
   if (FramePointerUsageView->getNumOccurrences() > 0 &&
       !F.hasFnAttribute("frame-pointer")) {
-    if (getFramePointerUsage() == FramePointer::All)
+    if (getFramePointerUsage() == FramePointerKind::All)
       NewAttrs.addAttribute("frame-pointer", "all");
-    else if (getFramePointerUsage() == FramePointer::NonLeaf)
+    else if (getFramePointerUsage() == FramePointerKind::NonLeaf)
       NewAttrs.addAttribute("frame-pointer", "non-leaf");
-    else if (getFramePointerUsage() == FramePointer::None)
+    else if (getFramePointerUsage() == FramePointerKind::None)
       NewAttrs.addAttribute("frame-pointer", "none");
   }
   if (DisableTailCallsView->getNumOccurrences() > 0)

@@ -465,7 +465,7 @@ llvm::Error dwarfgen::Generator::init(Triple TheTriple, uint16_t V) {
                                    inconvertibleErrorCode());
 
   TLOF = TM->getObjFileLowering();
-  MC.reset(new MCContext(MAI.get(), MRI.get(), TLOF));
+  MC.reset(new MCContext(TheTriple, MAI.get(), MRI.get(), TLOF, MSTI.get()));
   TLOF->Initialize(*MC, *TM);
 
   MCE = TheTarget->createMCCodeEmitter(*MII, *MRI, *MC);
@@ -504,7 +504,7 @@ llvm::Error dwarfgen::Generator::init(Triple TheTriple, uint16_t V) {
 
 StringRef dwarfgen::Generator::generate() {
   // Offset from the first CU in the debug info section is 0 initially.
-  unsigned SecOffset = 0;
+  uint64_t SecOffset = 0;
 
   // Iterate over each compile unit and set the size and offsets for each
   // DIE within each compile unit. All offsets are CU relative.

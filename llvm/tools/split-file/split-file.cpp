@@ -16,6 +16,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileOutputBuffer.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -166,7 +167,8 @@ int main(int argc, const char **argv) {
       status.type() != sys::fs::file_type::regular_file)
     fatal(output, "output cannot be a special file");
   if (std::error_code ec = sys::fs::remove(output, /*IgnoreNonExisting=*/true))
-    if (ec.value() != static_cast<int>(std::errc::directory_not_empty))
+    if (ec.value() != static_cast<int>(std::errc::directory_not_empty) &&
+        ec.value() != static_cast<int>(std::errc::file_exists))
       fatal(output, ec.message());
   return handle(**bufferOrErr, input);
 }

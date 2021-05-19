@@ -16,9 +16,15 @@
 #include <vector>
 
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
 #include "mlir/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Reducer/OptReductionPass.h"
+#include "mlir/Reducer/Passes.h"
+#include "mlir/Reducer/Passes/OpReducer.h"
+#include "mlir/Reducer/ReductionNode.h"
+#include "mlir/Reducer/ReductionTreePass.h"
 #include "mlir/Reducer/Tester.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
@@ -28,16 +34,15 @@
 
 using namespace mlir;
 
+namespace mlir {
+namespace test {
+void registerTestDialect(DialectRegistry &);
+} // namespace test
+} // namespace mlir
+
 static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
                                                 llvm::cl::Required,
                                                 llvm::cl::desc("<input file>"));
-
-static llvm::cl::opt<std::string>
-    testFilename("test", llvm::cl::Required, llvm::cl::desc("Testing script"));
-
-static llvm::cl::list<std::string>
-    testArguments("test-args", llvm::cl::ZeroOrMore,
-                  llvm::cl::desc("Testing script arguments"));
 
 static llvm::cl::opt<std::string>
     outputFilename("o",
@@ -58,39 +63,47 @@ int main(int argc, char **argv) {
 
   llvm::InitLLVM y(argc, argv);
 
-  registerAllDialects();
   registerMLIRContextCLOptions();
   registerPassManagerCLOptions();
+  registerAllPasses();
+  registerReducerPasses();
+  PassPipelineCLParser parser("", "Reduction Passes to Run");
 
   llvm::cl::ParseCommandLineOptions(argc, argv,
                                     "MLIR test case reduction tool.\n");
 
   std::string errorMessage;
 
-  auto testscript = openInputFile(testFilename, &errorMessage);
-  if (!testscript)
-    llvm::report_fatal_error(errorMessage);
-
   auto output = openOutputFile(outputFilename, &errorMessage);
   if (!output)
     llvm::report_fatal_error(errorMessage);
 
-  mlir::MLIRContext context;
-  mlir::OwningModuleRef moduleRef;
-  context.allowUnregisteredDialects(true);
+  mlir::DialectRegistry registry;
+  registerAllDialects(registry);
+#ifdef MLIR_INCLUDE_TESTS
+  mlir::test::registerTestDialect(registry);
+#endif
+  mlir::MLIRContext context(registry);
 
+  mlir::OwningModuleRef moduleRef;
   if (failed(loadModule(context, moduleRef, inputFilename)))
     llvm::report_fatal_error("Input test case can't be parsed");
 
-  // Initialize test environment.
-  Tester test(testFilename, testArguments);
-  test.setMostReduced(moduleRef.get());
+  auto errorHandler = [&](const Twine &msg) {
+    return emitError(UnknownLoc::get(&context)) << msg;
+  };
 
-  if (!test.isInteresting(inputFilename))
-    llvm::report_fatal_error(
-        "Input test case does not exhibit interesting behavior");
+  // Reduction pass pipeline.
+  PassManager pm(&context);
+  if (failed(parser.addToPipeline(pm, errorHandler)))
+    llvm::report_fatal_error("Failed to add pipeline");
 
-  test.getMostReduced().print(output->os());
+  ModuleOp m = moduleRef.get().clone();
+
+  if (failed(pm.run(m)))
+    llvm::report_fatal_error("Error running the reduction pass pipeline");
+
+  m.print(output->os());
   output->keep();
 
   return 0;

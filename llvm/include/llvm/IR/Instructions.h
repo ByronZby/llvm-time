@@ -106,7 +106,7 @@ public:
 
   /// Get allocation size in bits. Returns None if size can't be determined,
   /// e.g. in case of a VLA.
-  Optional<uint64_t> getAllocationSizeInBits(const DataLayout &DL) const;
+  Optional<TypeSize> getAllocationSizeInBits(const DataLayout &DL) const;
 
   /// Return the type that is being allocated by the instruction.
   Type *getAllocatedType() const { return AllocatedType; }
@@ -933,13 +933,13 @@ public:
                                    const Twine &NameStr = "",
                                    Instruction *InsertBefore = nullptr) {
     unsigned Values = 1 + unsigned(IdxList.size());
-    if (!PointeeType)
+    if (!PointeeType) {
       PointeeType =
           cast<PointerType>(Ptr->getType()->getScalarType())->getElementType();
-    else
-      assert(
-          PointeeType ==
-          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType());
+    } else {
+      assert(cast<PointerType>(Ptr->getType()->getScalarType())
+                 ->isOpaqueOrPointeeTypeMatches(PointeeType));
+    }
     return new (Values) GetElementPtrInst(PointeeType, Ptr, IdxList, Values,
                                           NameStr, InsertBefore);
   }
@@ -949,13 +949,13 @@ public:
                                    const Twine &NameStr,
                                    BasicBlock *InsertAtEnd) {
     unsigned Values = 1 + unsigned(IdxList.size());
-    if (!PointeeType)
+    if (!PointeeType) {
       PointeeType =
           cast<PointerType>(Ptr->getType()->getScalarType())->getElementType();
-    else
-      assert(
-          PointeeType ==
-          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType());
+    } else {
+      assert(cast<PointerType>(Ptr->getType()->getScalarType())
+                 ->isOpaqueOrPointeeTypeMatches(PointeeType));
+    }
     return new (Values) GetElementPtrInst(PointeeType, Ptr, IdxList, Values,
                                           NameStr, InsertAtEnd);
   }
@@ -1288,6 +1288,30 @@ public:
   ///
   static bool isRelational(Predicate P) {
     return !isEquality(P);
+  }
+
+  /// Return true if the predicate is SGT or UGT.
+  ///
+  static bool isGT(Predicate P) {
+    return P == ICMP_SGT || P == ICMP_UGT;
+  }
+
+  /// Return true if the predicate is SLT or ULT.
+  ///
+  static bool isLT(Predicate P) {
+    return P == ICMP_SLT || P == ICMP_ULT;
+  }
+
+  /// Return true if the predicate is SGE or UGE.
+  ///
+  static bool isGE(Predicate P) {
+    return P == ICMP_SGE || P == ICMP_UGE;
+  }
+
+  /// Return true if the predicate is SLE or ULE.
+  ///
+  static bool isLE(Predicate P) {
+    return P == ICMP_SLE || P == ICMP_ULE;
   }
 
   /// Exchange the two operands to this instruction in such a way that it does
@@ -2036,8 +2060,9 @@ public:
   /// Examples: shufflevector <4 x n> A, <4 x n> B, <1,2,3>
   ///           shufflevector <4 x n> A, <4 x n> B, <1,2,3,4,5>
   bool changesLength() const {
-    unsigned NumSourceElts =
-        cast<VectorType>(Op<0>()->getType())->getElementCount().Min;
+    unsigned NumSourceElts = cast<VectorType>(Op<0>()->getType())
+                                 ->getElementCount()
+                                 .getKnownMinValue();
     unsigned NumMaskElts = ShuffleMask.size();
     return NumSourceElts != NumMaskElts;
   }
@@ -2046,8 +2071,9 @@ public:
   /// elements than its source vectors.
   /// Example: shufflevector <2 x n> A, <2 x n> B, <1,2,3>
   bool increasesLength() const {
-    unsigned NumSourceElts =
-        cast<VectorType>(Op<0>()->getType())->getNumElements();
+    unsigned NumSourceElts = cast<VectorType>(Op<0>()->getType())
+                                 ->getElementCount()
+                                 .getKnownMinValue();
     unsigned NumMaskElts = ShuffleMask.size();
     return NumSourceElts < NumMaskElts;
   }
@@ -2233,6 +2259,10 @@ public:
   static bool isExtractSubvectorMask(const Constant *Mask, int NumSrcElts,
                                      int &Index) {
     assert(Mask->getType()->isVectorTy() && "Shuffle needs vector constant.");
+    // Not possible to express a shuffle mask for a scalable vector for this
+    // case.
+    if (isa<ScalableVectorType>(Mask->getType()))
+      return false;
     SmallVector<int, 16> MaskAsInts;
     getShuffleMask(Mask, MaskAsInts);
     return isExtractSubvectorMask(MaskAsInts, NumSrcElts, Index);
@@ -2240,7 +2270,13 @@ public:
 
   /// Return true if this shuffle mask is an extract subvector mask.
   bool isExtractSubvectorMask(int &Index) const {
-    int NumSrcElts = cast<VectorType>(Op<0>()->getType())->getNumElements();
+    // Not possible to express a shuffle mask for a scalable vector for this
+    // case.
+    if (isa<ScalableVectorType>(getType()))
+      return false;
+
+    int NumSrcElts =
+        cast<FixedVectorType>(Op<0>()->getType())->getNumElements();
     return isExtractSubvectorMask(ShuffleMask, NumSrcElts, Index);
   }
 
@@ -2545,6 +2581,7 @@ class PHINode : public Instruction {
                    Instruction *InsertBefore = nullptr)
     : Instruction(Ty, Instruction::PHI, nullptr, 0, InsertBefore),
       ReservedSpace(NumReservedValues) {
+    assert(!Ty->isTokenTy() && "PHI nodes cannot have token type!");
     setName(NameStr);
     allocHungoffUses(ReservedSpace);
   }
@@ -2553,6 +2590,7 @@ class PHINode : public Instruction {
           BasicBlock *InsertAtEnd)
     : Instruction(Ty, Instruction::PHI, nullptr, 0, InsertAtEnd),
       ReservedSpace(NumReservedValues) {
+    assert(!Ty->isTokenTy() && "PHI nodes cannot have token type!");
     setName(NameStr);
     allocHungoffUses(ReservedSpace);
   }
@@ -5240,6 +5278,15 @@ inline unsigned getLoadStoreAddressSpace(Value *I) {
   if (auto *LI = dyn_cast<LoadInst>(I))
     return LI->getPointerAddressSpace();
   return cast<StoreInst>(I)->getPointerAddressSpace();
+}
+
+/// A helper function that returns the type of a load or store instruction.
+inline Type *getLoadStoreType(Value *I) {
+  assert((isa<LoadInst>(I) || isa<StoreInst>(I)) &&
+         "Expected Load or Store instruction");
+  if (auto *LI = dyn_cast<LoadInst>(I))
+    return LI->getType();
+  return cast<StoreInst>(I)->getValueOperand()->getType();
 }
 
 //===----------------------------------------------------------------------===//
