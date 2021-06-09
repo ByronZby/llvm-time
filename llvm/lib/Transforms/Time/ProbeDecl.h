@@ -18,9 +18,29 @@ struct Instrument {
     llvm::FunctionCallee exit_loop;
     llvm::FunctionCallee latch;
     llvm::FunctionCallee path;
+    llvm::FunctionCallee header;
+    llvm::Module         *_M;
 
-    void declare(llvm::Module &);
-    void placeCtorDtor(llvm::Module &);
+    static Instrument *get(llvm::Module *M) {
+        if (Instance._M == nullptr || Instance._M != M) {
+            Instance.declare(M);
+            Instance.placeCtorDtor(M);
+            Instance._M = M;
+        }
+
+        return &Instance;
+    }
+
+private:
+    // Singleton class
+    Instrument() : _M(nullptr) { }
+
+    Instrument(llvm::Module *M) : _M(M) { }
+
+    void declare(llvm::Module *);
+    void placeCtorDtor(llvm::Module *);
+
+    static Instrument Instance;
 };
 
 } // namespace time

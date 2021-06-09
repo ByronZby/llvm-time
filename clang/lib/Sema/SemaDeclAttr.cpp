@@ -8297,12 +8297,11 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case ParsedAttr::AT_UseHandle:
     handleHandleAttr<UseHandleAttr>(S, D, AL);
     break;
-<<<<<<< HEAD
   
   // time analysis
   case ParsedAttr::AT_TimeTarget:
     handleTimeTargetAttr(S, D, AL);
-=======
+    break;
 
   case ParsedAttr::AT_EnforceTCB:
     handleEnforceTCBAttr<EnforceTCBAttr, EnforceTCBLeafAttr>(S, D, AL);
@@ -8314,7 +8313,6 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
 
   case ParsedAttr::AT_BuiltinAlias:
     handleBuiltinAliasAttr(S, D, AL);
->>>>>>> upstream/main
     break;
   }
 }

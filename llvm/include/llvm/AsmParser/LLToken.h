@@ -456,6 +456,8 @@ enum Kind {
   kw_bit,
   kw_varFlags,
 
+  kw_time_target,
+
   // Unsigned Valued tokens (UIntVal).
   LabelID,    // 42:
   GlobalID,   // @42

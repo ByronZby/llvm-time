@@ -1,4 +1,4 @@
-add_llvm_library( LLVMTime MODULE BUILDTREE_ONLY
+add_llvm_pass_plugin( LoopTime
   Time.cpp
   ProbeDecl.cpp
   Path.cpp
@@ -14,7 +14,4 @@ add_llvm_library( LLVMTime MODULE BUILDTREE_ONLY
 
   DEPENDS
   intrinsics_gen
-
-  PLUGIN_TOOL
-  opt
   )

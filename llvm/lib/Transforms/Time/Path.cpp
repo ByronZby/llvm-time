@@ -112,7 +112,7 @@ static void getProperLoop(const Loop *L, SmallPtrSetImpl<BasicBlock *> &Result) 
 
     for (auto *BB : L->getBlocks()) {
         dbgs() << "Collect: " << BB->getName() << "\n";
-        if (isPotentiallyReachable(L->getLoopLatch(), BB, &DT)) {
+        if (isPotentiallyReachable(L->getLoopLatch(), BB, nullptr, &DT)) {
             Result.insert(BB);
         }
     }
@@ -186,7 +186,7 @@ static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS) {
 
     needsComma = false;
     // Assign identifier to basicblock
-    findAllPaths(G, [&G, &PP, &OS, &needsComma] (const std::list<Vertex *> &Path) {
+    findAllPaths(G, [&PP, &OS, &needsComma] (const std::list<Vertex *> &Path) {
             int PathNum = 0;
             auto I = Path.begin();
             const auto E = Path.end();
@@ -206,15 +206,10 @@ static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS) {
                 needsInnerComma = true;
                 OS << "        " << '"' << BB->getName() << '"';
             }
-                
 
             OS << "    ]";
     });
 
     OS << "\n}\n}\n";
 }
-
-    
-
-
 
