@@ -5,325 +5,272 @@
 #ifndef PTRGRAPH_H_INCLUDED_
 #define PTRGRAPH_H_INCLUDED_
 
-#include "Exchange.h"
-
+#include <algorithm>
 #include <cassert>
 #include <iostream>
-#include <list>
+#include <iterator>
 #include <map>
 #include <set>
-#include <utility>
+#include <vector>
 
-class Vertex {
+class DirectedPtrGraphImpl {
 public:
-    Vertex() : Vertex(nullptr) { }
-
-    Vertex(void *ptr) : val(ptr), tag(false) { }
-
-    Vertex(const Vertex &that) : val(that.val), tag(that.tag) { }
-
-    Vertex(Vertex &&that) : 
-        val(std::exchange(that.val, nullptr)),
-        tag(std::exchange(that.tag, false)) { }
-
-    Vertex &operator=(const Vertex &that) {
-        val = that.val;
-        tag = that.tag;
-
-        return *this;
-    }
-
-    ~Vertex() { /*TODO: deregister*/ }
-
-    template<typename T>
-    T getValue() const {
-        static_assert(std::is_pointer<T>(), "getValue() needs a Pointer");
-        return static_cast<T>(val);
-    }
-
-    std::ostream &operator<<(std::ostream &os);
-
-    bool operator==(const Vertex &rhs) const {
-        return val == rhs.val;
-    }
-
-    bool operator!=(const Vertex &rhs) const {
-        return !(*this == rhs);
-    }
-
-    bool operator< (const Vertex &rhs) const {
-        return val < rhs.val;
-    }
-
-    bool operator> (const Vertex &rhs) const {
-        return rhs < *this;
-    }
-
-    bool operator<=(const Vertex &rhs) const {
-        return !(*this > rhs);
-    }
-
-    bool operator>=(const Vertex &rhs) const {
-        return !(*this < rhs);
-    }
-
-    int setTag(int v) {
-        int old = tag;
-        tag = v;
-        return old;
-    }
-
-    int getTag() const {
-        return tag;
-    }
-
-private:
-    void *val;
-    int tag;
-};
-
-struct Edge {
-    Vertex *src;
-    Vertex *dest;
-    int weight;
-
-    Edge() : Edge(nullptr, nullptr) { }
-    Edge(Vertex *s, Vertex *d) : Edge(s, d, 0) { }
-    Edge(Vertex *s, Vertex *d, int w) : src(s), dest(d), weight(w) { }
-
-    bool operator==(const Edge &rhs) const {
-        return src == rhs.src && dest == rhs.dest;
-    }
-
-    bool operator!=(const Edge &rhs) const {
-        return !(*this == rhs);
-    }
-
-    bool operator< (const Edge &rhs) const {
-        if (src == rhs.src) {
-            return dest < rhs.dest;
-        }
-        return src < rhs.src;
-    }
-
-    bool operator> (const Edge &rhs) const {
-        return rhs < *this;
-    }
-
-    bool operator<=(const Edge &rhs) const {
-        return !(*this > rhs);
-    }
-
-    bool operator>=(const Edge &rhs) const {
-        return !(*this < rhs);
-    }
-};
-
-class PtrGraphBase {
-public:
-    PtrGraphBase(const PtrGraphBase &that) : PtrGraphBase() {
-        that.copyTo(*this);
-    }
-
-    PtrGraphBase(PtrGraphBase &&that) : vertices(std::move(that.vertices)), adjacencies(std::move(that.adjacencies)) { }
-
-    virtual ~PtrGraphBase() {
-        for (auto &v : vertices) {
-            delete v.second;
-        }
-    }
-
-    size_t V() const {
-        return vertices.size();
-    }
-
-    size_t E() const {
-        size_t sum = 0;
-        for (const auto &iter : adjacencies) {
-            sum += iter.second.size();
-        }
-        return sum;
-    }
-
-    template<typename T>
-    void addVertex(T ptr) noexcept {
-        static_assert(std::is_pointer<T>(), "addVertex() needs a pointer!");
-        assert(!contains(ptr) && "Vertex already exists in graph!");
-
-        auto *v = new Vertex(ptr);
-        addVertexWithVertex(v);
-    }
-
-    template<typename T>
-    void removeVertex(T ptr) noexcept {
-        static_assert(std::is_pointer<T>(), "removeVertex() needs a pointer!");
-        auto result = vertices.find(static_cast<void *>(ptr));
-        if (result != vertices.end()) {
-            adjacencies.erase(result->second);
-            delete result->second;
-            vertices.erase(result);
-        }
-    }
-
-    template<typename T>
-    Vertex *getVertex(T ptr) const {
-        static_assert(std::is_pointer<T>(), "removeVertex() needs a pointer!");
-        assert(contains(ptr) && "removeVertex() ptr does not exist!");
-
-        return vertices.at(static_cast<void *>(ptr));
-    }
-
-    std::list<Vertex *> allVertices() const {
-        std::list<Vertex *> vs;
-        for (auto &v : vertices) {
-            vs.push_back(v.second);
-        }
-
-        return vs;
-    }
-
-    template<typename T>
-    void addEdge(T src, T tgt) {
-        static_assert(std::is_pointer<T>(), "addEdge() needs pointers!");
-        Vertex *v = getVertex(src);
-        Vertex *w = getVertex(tgt);
-
-        addEdgeFromVertices(v, w);
-    }
-
-    template<typename T>
-    void removeEdge(T src, T tgt) {
-        static_assert(std::is_pointer<T>(), "addEdge() needs pointers!");
-        Vertex *v = getVertex(src);
-        Vertex *w = getVertex(tgt);
-
-        removeEdgeFromVertices(v, w);
-    }
-
-    bool isEdge(Vertex *const v, Vertex *const w) const {
-        auto & es = adjacencies.at(v);
-        return es.find(Edge(v, w)) != es.end();
-    }
-
-    template<typename T>
-    bool contains(T ptr) const noexcept {
-        static_assert(std::is_pointer<T>(), "contains() needs a pointer!");
-        return vertices.find(static_cast<void *>(ptr)) != vertices.end();
-    }
-
-    /*
-    template<typename T>
-    const std::set<Edge> &adj(T src) const {
-        assert(contains(src) && "getEdgesFrom() vertex does not exist!");
-        void *s = static_cast<void *>(src);
-        return adjacencies.at(vertices.at(s));
-    }
-    */
-
-    const std::set<Edge> adj(Vertex * const v) const {
-        return adjacencies.at(v);
-    }
-
-    const std::list<Edge> allEdges() const {
-        std::list<Edge> es;
-        for (const auto &p : adjacencies) {
-            for (const auto &e : p.second) {
-                es.push_back(e);
-            }
-        }
-        return es;
-    }
-
-    void copyTo(PtrGraphBase &that) const;
-
-    void print(std::ostream &os) const;
-
-    PtrGraphBase &operator=(const PtrGraphBase &that) {
-        that.copyTo(*this);
-        return *this;
-    }
-
-    std::ostream &operator<<(std::ostream &os);
-
-    void invariant() const;
+    template<typename PtrT> using AdjT     = std::set<PtrT>;
+    template<typename PtrT> using EdgeT    = std::pair<PtrT, PtrT>;
+    template<typename PtrT> using AdjListT = std::map<PtrT, AdjT<PtrT>>;
 
 protected:
-    PtrGraphBase() : vertices(), adjacencies() { }
+    AdjListT<void *>      Adjacencies;
+    std::map<void *, int> Indegrees;
 
-    void addVertex(const Vertex &vertex) {
-        auto *v = new Vertex(vertex);
-        addVertexWithVertex(v);
-    }
+    DirectedPtrGraphImpl() = default;
 
-    virtual void addVertexWithVertex(Vertex * const v) {
-        vertices[v->getValue<void *>()] = v;
-        adjacencies[v];
-    }
+    explicit DirectedPtrGraphImpl(const DirectedPtrGraphImpl &That) = default;
 
-    virtual void addEdgeFromVertices(Vertex *src, Vertex *tgt) =0;
-    virtual void removeEdgeFromVertices(Vertex *src, Vertex *tgt) =0;
+    explicit DirectedPtrGraphImpl(DirectedPtrGraphImpl &&That) = default;
 
-    std::map<void *, Vertex *> vertices;
-    std::map<Vertex *, std::set<Edge>> adjacencies;
-};
+    ~DirectedPtrGraphImpl() { }
 
-class DirectedPtrGraph : public PtrGraphBase {
+    DirectedPtrGraphImpl &operator=(const DirectedPtrGraphImpl &) = default;
+
+    DirectedPtrGraphImpl &operator=(DirectedPtrGraphImpl &&) = default;
+
 public:
-    DirectedPtrGraph() : indegrees() { }
+    size_t getNumNodes() const;
 
-    virtual ~DirectedPtrGraph() { }
+    size_t getNumEdges() const;
 
-    DirectedPtrGraph(const DirectedPtrGraph &that) :
-        PtrGraphBase(that),
-        indegrees() {
-        for (Vertex *const v : that.allVertices()) {
-            void *ptr = v->getValue<void*>();
-            indegrees[getVertex(ptr)] = that.indegree(v);
-        }
+    bool contains(void * V) const;
+
+    bool isEdge(void * V, void * W) const;
+
+    bool insert(void * V);
+
+    bool remove(void * V);
+
+    bool connect(void * S, void * D);
+
+    void disconnect(void * S, void * D);
+
+    int indegree(void * V) const;
+
+    int outdegree(void * V) const;
+
+    std::vector<void *> getEntries() const {
+        return getEntriesAs<void *>();
+    }
+    bool hasEntry() const {
+        return !getEntries().empty();
     }
 
-    DirectedPtrGraph(DirectedPtrGraph &&that) :
-        PtrGraphBase(std::move(that)), indegrees(std::move(that.indegrees)) { }
+    bool hasSingleEntry() const {
+        return getEntries().size() == 1;
+    }
 
+    void * getEntry() const {
+        auto Es = getEntries();
+        return (Es.size() == 1) ? Es[0] : getInvalidMarker<void *>();
+    }
 
-    int indegree(Vertex *v) const {
-        return indegrees.at(v);
+    std::vector<void *> getExits() const {
+        return getExitsAs<void *>();
+    }
+
+    bool hasExit() const {
+        return !getExits().empty();
+    }
+
+    bool hasSingleExit() const {
+        return getExits().size() == 1;
+    }
+
+    void * getExit() const {
+        auto Es = getExits();
+        return (Es.size() == 1) ? Es[0] : getInvalidMarker<void *>();
+    }
+
+    const std::map<void *, int> & getAllIndegrees() const {
+        return Indegrees;
+    }
+
+    std::vector<void *> getAllNodes() const {
+        return getAllNodesAs<void *>();
+    }
+
+    std::vector<void *> getAdj(void * const V) const {
+        return getAdjAs<void *>(V);
+    }
+
+    std::vector<EdgeT<void *>> getAllEdges() const {
+        return getAllEdgesAs<void *>();
+    }
+
+    void print(std::ostream &OS) const;
+
+    std::ostream & operator<<(std::ostream & OS) {
+        print(OS);
+        return OS;
+    }
+
+    void dump() const {
+        print(std::cerr);
     }
 
 protected:
-    virtual void addVertexWithVertex(Vertex * const v) override {
-        indegrees[v] = 0;
-        PtrGraphBase::addVertexWithVertex(v);
+    template<typename PtrT>
+    static PtrT castFromVoidPtr(void * P) {
+        return static_cast<PtrT>(P);
     }
 
-    virtual void addEdgeFromVertices(Vertex *src, Vertex *tgt) override {
-        adjacencies[src].insert(Edge(src, tgt));
-        indegrees[tgt]++;
+    template<typename PtrT>
+    static void * castToVoidPtr(PtrT P) {
+        return static_cast<void *>(P);
     }
 
-    virtual void removeEdgeFromVertices(Vertex *src, Vertex *tgt) override {
-        adjacencies[src].erase(Edge(src, tgt));
-        indegrees[tgt]--;
+    template<typename PtrT>
+    static PtrT getInvalidMarker() {
+        return reinterpret_cast<PtrT>(-1);
     }
 
-private:
-    std::map<Vertex *, int> indegrees;
+    template<typename PtrT>
+    std::map<PtrT, int> getAllIndegreesAs() const {
+        std::map<PtrT, int> Result;
+        for (const auto & P : Indegrees) {
+            Result[castFromVoidPtr<PtrT>(P.first)] = P.second;
+        }
+        return Result;
+    }
+
+    template<typename PtrT>
+    std::vector<PtrT> getEntriesAs() const {
+        std::vector<PtrT> Es;
+        for (const auto & P : Adjacencies)
+            if (indegree(P.first) == 0)
+                // if this node has no incoming edge, it must be an entry
+                Es.push_back(castFromVoidPtr<PtrT>(P.first));
+        return Es;
+    }
+
+    template<typename PtrT>
+    std::vector<PtrT> getExitsAs() const {
+        std::vector<PtrT> Es;
+        for (const auto & P : Adjacencies)
+            if (outdegree(P.first) == 0)
+                // if this node has no outgoing edge, it must be an exit
+                Es.push_back(castFromVoidPtr<PtrT>(P.first));
+        return Es;
+    }
+
+    template<typename PtrT>
+    std::vector<PtrT> getAllNodesAs() const {
+        std::vector<PtrT> Ns;
+        for (auto &VW : Adjacencies)
+            Ns.push_back(castFromVoidPtr<PtrT>(VW.first));
+        return Ns;
+    }
+
+    template<typename PtrT>
+    std::vector<PtrT> getAdjAs(const PtrT N) const {
+        auto &Adj = Adjacencies.at(N);
+        std::vector<PtrT> Result(Adj.size());
+        std::transform(Adj.begin(), Adj.end(), Result.begin(), castFromVoidPtr<PtrT>);
+        return Result;
+    }
+
+    template<typename PtrT>
+    std::vector<EdgeT<PtrT>> getAllEdgesAs() const {
+        std::vector<EdgeT<PtrT>> Es;
+        for (auto &VW : Adjacencies)
+            for (auto &W : VW.second)
+                Es.push_back(
+                        EdgeT<PtrT>(castFromVoidPtr<PtrT>(VW.first),
+                                    castFromVoidPtr<PtrT>(W)));
+        return Es;
+    }
 };
 
-class UndirectedPtrGraph : public PtrGraphBase {
+template<typename PtrType>
+class DirectedPtrGraph : public DirectedPtrGraphImpl {
+    // This is the common code among all the PtrGraph<>'s
+
 public:
-    UndirectedPtrGraph() { }
-protected:
-    virtual void addEdgeFromVertices(Vertex *src, Vertex *tgt) override {
-        adjacencies[src].insert(Edge(src, tgt));
-        adjacencies[tgt].insert(Edge(tgt, src));
+    using BaseT = DirectedPtrGraphImpl;
+    using PtrT  = typename std::pointer_traits<PtrType>::pointer;
+
+    DirectedPtrGraph() = default;
+
+    DirectedPtrGraph(const DirectedPtrGraph &That) = default;
+
+    DirectedPtrGraph(DirectedPtrGraph &&That) = default;
+
+    ~DirectedPtrGraph() { }
+
+    DirectedPtrGraph &operator=(const DirectedPtrGraph &) = default;
+
+    DirectedPtrGraph &operator=(DirectedPtrGraph &&) = default;
+
+    bool contains(PtrT V) const {
+        return BaseT::contains(castToVoidPtr(V));
+    }
+    
+    bool isEdge(PtrT V, PtrT W) const {
+        return BaseT::isEdge(castToVoidPtr(V), castToVoidPtr(W));
     }
 
-    virtual void removeEdgeFromVertices(Vertex *src, Vertex *tgt) override {
-        adjacencies[src].erase(Edge(src, tgt));
-        adjacencies[tgt].erase(Edge(tgt, src));
+    bool insert(PtrT V) {
+        return BaseT::insert(castToVoidPtr(V));
     }
 
+    bool remove(PtrT V) {
+        return BaseT::remove(castToVoidPtr(V));
+    }
+
+    bool connect(PtrT S, PtrT D) {
+        return BaseT::connect(castToVoidPtr(S), castToVoidPtr(D));
+    }
+
+    void disconnect(PtrT S, PtrT D) {
+        return BaseT::disconnect(castToVoidPtr(S), castToVoidPtr(D));
+    }
+
+    int indegree(PtrT V) const {
+        return BaseT::indegree(castToVoidPtr(V));
+    }
+
+    int outdegree(PtrT V) const {
+        return BaseT::outdegree(castToVoidPtr(V));
+    }
+
+    std::vector<PtrT> getEntries() const {
+        return getEntriesAs<PtrT>();
+    }
+
+    PtrT getEntry() const {
+        return castFromVoidPtr<PtrT>(BaseT::getEntry());
+    }
+
+    std::vector<PtrT> getExits() const {
+        return getExitsAs<PtrT>();
+    }
+
+    PtrT getExit() const {
+        return castFromVoidPtr<PtrT>(BaseT::getExit());
+    }
+
+    std::map<PtrT, int> getAllIndegrees() const {
+        return getAllIndegreesAs<PtrT>();
+    }
+
+    std::vector<PtrT> getAllNodes() const {
+        return getAllNodesAs<PtrT>();
+    }
+
+    std::vector<PtrT> getAdj(const PtrT N) const {
+        return getAdjAs<PtrT>(N);
+    }
+
+    std::vector<EdgeT<PtrT>> getAllEdges() const {
+        return getAllEdgesAs<PtrT>();
+    }
 };
-
 #endif

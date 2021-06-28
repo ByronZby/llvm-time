@@ -1,80 +1,91 @@
-//===- PtrGraph.cpp - Implementation of a graph of pointers -----*- C++ -*-===//
-// It is oriented to implement the path profiling algorithm
-//===----------------------------------------------------------------------===//
 
 #include "PtrGraph.h"
 
-#include <iostream>
-#include <iomanip>
-
-using namespace std;
-
-ostream &Vertex::operator<<(ostream &os) {
-    os << "<Vertex> payload: " << val << " tag: " << tag;
-    return os;
+size_t DirectedPtrGraphImpl::getNumNodes() const {
+    return Adjacencies.size();
 }
 
-ostream &PtrGraphBase::operator<<(ostream &os) {
-    os << "<Graph with " << vertices.size() << " vertices>";
-    return os;
+size_t DirectedPtrGraphImpl::getNumEdges() const {
+    size_t Sum = 0;
+    for (auto const &Pair : Adjacencies) {
+        Sum += Pair.second.size();
+    }
+    return Sum;
 }
 
-void PtrGraphBase::print(ostream &os) const {
-    os << "digraph {\n";
-    for (const auto &iter : adjacencies) {
-        os << "\t\"" << iter.first->getValue<void*>() << "\" -> { ";
-        for (const auto &edge : iter.second) {
-            os << "\"" << edge.dest->getValue<void*>() << "\" ";
+bool DirectedPtrGraphImpl::contains(void * V) const {
+    return Adjacencies.find(V) != Adjacencies.end();
+}
+
+bool DirectedPtrGraphImpl::isEdge(void * V, void * W) const {
+    auto & Adjs = Adjacencies.at(V);
+    return Adjs.find(W) != Adjs.end();
+}
+
+bool DirectedPtrGraphImpl::insert(void * V) {
+    if (contains(V))
+        return false;
+
+    Adjacencies.emplace(V, AdjT<void *>());
+    Indegrees[V] = 0;
+    return true;
+}
+
+bool DirectedPtrGraphImpl::remove(void * V) {
+    decltype(Adjacencies)::iterator Iter;
+    if ((Iter = Adjacencies.find(V)) != Adjacencies.end()) {
+        Adjacencies.erase(Iter);
+        Indegrees.erase(Indegrees.find(V));
+
+        for (auto &KV : Adjacencies) {
+            KV.second.erase(V); //NOTE: No-op if V does not exist
         }
-        os << "};\n";
+        return true;
     }
-    os << "}";
+
+    return false;
 }
 
-void PtrGraphBase::invariant() const {
-    // 1. In vertices map, key and value correspond
-    for (const auto iter : vertices) {
-        assert(iter.first == iter.second->getValue<void*>() && "Invariant 1!");
+bool DirectedPtrGraphImpl::connect(void * Src, void * Dest) {
+    assert(contains(Src) && "connect(): Graph does not contain Src!");
+    assert(contains(Dest) && "connect(): Graph does not contain Dest!");
+    if (Adjacencies.at(Src).insert(Dest).second) {
+        ++Indegrees[Dest];
+        return true;
     }
 
-    // 2. All vertices have adjacency list
-    for (const auto iter : vertices) {
-        assert(adjacencies.find(iter.second) != adjacencies.end() && "Invariant 3!");
-    }
+    return false;
+}
 
-    // 3. All edges are within the graph
-    for (const auto iter : adjacencies) {
-        for (const auto edge : iter.second) {
-            assert(contains(edge.src->getValue<void*>()) && "Invariant 3!");
-            assert(contains(edge.dest->getValue<void*>()) && "Invariant 3!");
+void DirectedPtrGraphImpl::disconnect(void * Src, void * Dest) {
+    assert(contains(Src) && "disconnect(): Graph does not contain Src!");
+    assert(contains(Dest) && "disconnect(): Graph does not contain Dest!");
+
+    auto &Adj = Adjacencies.at(Src);
+    assert(Adj.find(Dest) != Adj.end()
+            && "disconnect(): Graph does not contain Src -> Dest!");
+
+    Adj.erase(Dest);
+    --Indegrees[Dest];
+}
+
+int DirectedPtrGraphImpl::indegree(void * V) const {
+    return Indegrees.at(V);
+}
+
+int DirectedPtrGraphImpl::outdegree(void * V) const {
+    return static_cast<int>(Adjacencies.at(V).size());
+}
+
+void DirectedPtrGraphImpl::print(std::ostream &OS) const {
+    OS << "digraph {\n";
+    for (const auto &VW : Adjacencies) {
+        OS << "\t\"" << VW.first << "\" -> { ";
+        for (const auto &W : VW.second) {
+            OS << "\"" << W << "\" ";
         }
+        OS << "};\n";
     }
+    OS << "}";
 }
-
-void PtrGraphBase::copyTo(PtrGraphBase &that) const {
-    map<void *, Vertex *> vs;
-    map<Vertex *, std::set<Edge>> adjs;
-
-    // allocate and copy all vertices
-    for (const auto &iter : vertices) {
-        vs[iter.first] = new Vertex(*iter.second);
-    }
-
-    // for all vertices, copy the adjacencies
-    for (const auto &iter : vertices) {
-        auto v = vs[iter.first];
-        auto &edges = adjs[v];
-
-        for (const auto &edge : adjacencies.at(iter.second)) {
-            auto w = vs[edge.dest->getValue<void*>()];
-
-            edges.insert(Edge(v, w));
-        }
-    }
-
-    that.vertices = move(vs);
-    that.adjacencies = move(adjs);
-}
-
-
 
