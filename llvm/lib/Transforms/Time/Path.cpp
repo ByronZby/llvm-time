@@ -3,149 +3,128 @@
 //===----------------------------------------------------------------------===//
 
 #include "Path.h"
-
-#include "SingleEntrySingleExitDAG.h"
-#include "PathProfiler.h"
-#include "Cycle.h"
+#include "PtrGraph.h"
+#include "GraphAlgorithms.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
+
 #include "llvm/Analysis/CFG.h"
+
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IRBuilder.h"
+
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <list>
 #include <stack>
+#include <tuple>
 
 using namespace llvm;
 
-using BlockSet = SmallPtrSetImpl<BasicBlock *>;
-using SESEDAG = SingleEntrySingleExitDAG;
+static SmallPtrSet<BasicBlock *, 16> findReachableBlocks(const Loop *L);
 
-static void constructGraph(const BlockSet &BBs, DirectedPtrGraph &G);
-static void reduceCycles(const Loop *L, SESEDAG &G);
-static void getProperLoop(const Loop *L, SmallPtrSetImpl<BasicBlock *> &Result);
+static DirectedPtrGraph<BasicBlock *>
+constructGraph(const SmallPtrSetImpl<BasicBlock *> &BBs);
 
-static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS);
+static void serializeProfile(const DirectedPtrGraph<BasicBlock *> &G,
+                             const PathProfiler<BasicBlock *> &PP,
+                             raw_ostream &OS);
 
-Value *LLVMTime::instrumentPathProfile(llvm::Loop *L, raw_ostream &OS) {
-    SESEDAG G;
+static Value* insertInstrumentation(Loop *L,
+                                    PathProfiler<BasicBlock *> &PP);
+
+static void addBlockEntryToParents(Loop *L, BasicBlock *BB);
+
+Value* LLVMTime::instrumentPathProfile(Loop *L, raw_ostream &OS) {
+    DirectedPtrGraph<BasicBlock *> G = constructGraph(findReachableBlocks(L));
+    G.disconnect(L->getLoopLatch(), L->getHeader());
+
+    PathProfiler<BasicBlock *> PP(G);
+
+    serializeProfile(G, PP, OS);
+
+    return insertInstrumentation(L, PP);
+}
+
+static SmallPtrSet<BasicBlock *, 16> findReachableBlocks(const Loop *L) {
     SmallPtrSet<BasicBlock *, 16> BBs;
-
-    getProperLoop(L, BBs);
-    constructGraph(BBs, G);
-    reduceCycles(L, G);
-
-    G.update();
-
-    PathProfiler PP(G);
-
-    printProfile(G, PP, OS);
-
-    Function *F = L->getHeader()->getParent();
-    Instruction *InsertPt = &*L->getLoopPreheader()->getFirstInsertionPt();
-
-    Type *PathNumType = Type::getInt32Ty(F->getContext());
-    Value *PathNumPtr = new AllocaInst(PathNumType, 0, "pathnumptr", InsertPt);
-
-    InsertPt = &*L->getHeader()->getFirstInsertionPt();
-    new StoreInst(ConstantInt::get(PathNumType, 0), PathNumPtr, InsertPt);
-
-    for (const auto &Iter : PP) {
-        const Edge &E = Iter.first;
-        const int Inc = Iter.second;
-
-        BasicBlock *From = E.src->getValue<BasicBlock*>();
-        BasicBlock *To = E.dest->getValue<BasicBlock*>();
-
-        dbgs() << "Splitting Edge between " << static_cast<void*>(From) << " : " << From->getName() << " and "
-               << static_cast<void*>(To) << " : " << To->getName() << "\n";
-
-        BasicBlock *NewBlock = SplitEdge(E.src->getValue<BasicBlock *>(), E.dest->getValue<BasicBlock *>());
-        L->addBlockEntry(NewBlock);
-
-        InsertPt = &*NewBlock->getFirstInsertionPt();
-        Value *PathNum = new LoadInst(PathNumType, PathNumPtr, "pathnum", InsertPt);
-        Value *NewPathNum;
-        if (Inc > 0) {
-            NewPathNum = BinaryOperator::Create(Instruction::Add, PathNum, ConstantInt::get(PathNumType, Inc), "newpathnum", InsertPt);
-        } else {
-            NewPathNum = BinaryOperator::Create(Instruction::Sub, PathNum, ConstantInt::get(PathNumType, -Inc), "newpathnum", InsertPt);
-        }
-
-        new StoreInst(NewPathNum, PathNumPtr, InsertPt);
-    }
-
-    return PathNumPtr;
-}
-
-static void constructGraph(const BlockSet &BBs, DirectedPtrGraph &G) {
-    for (BasicBlock *BB : BBs) {
-        G.addVertex(BB);
-    }
-
-    for (BasicBlock *BB : BBs) {
-        for (succ_iterator S = succ_begin(BB), E = succ_end(BB); S != E; ++S) {
-            if (BBs.contains(*S)) {
-                dbgs() << static_cast<void*>(BB) << " : " << BB->getName()
-                       << " -> " << static_cast<void*>(*S) << " : " << (*S)->getName() << "\n";
-                G.addEdge(BB, *S);
-            }
-        }
-    }
-}
-
-static void reduceCycles(const Loop *L, SESEDAG &G) {
-    G.removeEdge(L->getLoopLatch(), L->getHeader());
-    
-    assert(!Cycle(G).hasCycle());
-}
-
-static void getProperLoop(const Loop *L, SmallPtrSetImpl<BasicBlock *> &Result) {
     DominatorTree DT(*L->getHeader()->getParent());
-    Result.clear();
+
+    BasicBlock *Latch = L->getLoopLatch();
 
     for (auto *BB : L->getBlocks()) {
         dbgs() << "Collect: " << BB->getName() << "\n";
-        if (isPotentiallyReachable(L->getLoopLatch(), BB, nullptr, &DT)) {
-            Result.insert(BB);
+        if (isPotentiallyReachable(Latch, BB, nullptr, &DT)) {
+            BBs.insert(BB);
         }
     }
+
+    return BBs;
+}
+
+
+static DirectedPtrGraph<BasicBlock *>
+constructGraph(const SmallPtrSetImpl<BasicBlock *> &BBs) {
+    DirectedPtrGraph<BasicBlock *> G;
+
+    for (BasicBlock *BB : BBs) {
+        G.insert(BB);
+    }
+
+    for (BasicBlock *Src : BBs) {
+        for (succ_iterator S = succ_begin(Src), E = succ_end(Src);
+             S != E; ++S) {
+            BasicBlock *Dest = *S;
+            if (BBs.contains(Dest)) {
+                dbgs() << static_cast<void*>(Src) << " : " << Src->getName()
+                       << " -> " << static_cast<void*>(Dest) << " : "
+                       << Dest->getName() << "\n";
+
+                G.connect(Src, Dest);
+            }
+        }
+    }
+
+    return G;
 }
 
 template <class Function>
-static void DFS(SESEDAG &G, Vertex *Src, Vertex *Dest, std::list<Vertex *> &Path, Function F) {
+static void DFS(const DirectedPtrGraph<BasicBlock *> &G,
+                BasicBlock *Src,
+                BasicBlock *Dest,
+                std::list<BasicBlock *> &Path,
+                Function F) {
     //TODO: make this non-recursive
+
     if (Src == Dest) {
         F(Path);
     } else {
-        for (const Edge &E : G.adj(Src)) {
-            Vertex *W = E.dest;
-
-            Path.push_back(W);
-            DFS(G, W, Dest, Path, F);
+        for (BasicBlock *Adjacent : G.getAdj(Src)) {
+            Path.push_back(Adjacent);
+            DFS(G, Adjacent, Dest, Path, F);
             Path.pop_back();
         }
     }
 }
 
-
 template <class Function>
-static void findAllPaths(SESEDAG &G, Function F) {
-    std::list<Vertex *> Path;
-    Vertex *Entry = G.getEntryVertex(), *Exit = G.getExitVertex();
+static void findAllPaths(const DirectedPtrGraph<BasicBlock *> &G,
+                         Function F) {
+    std::list<BasicBlock *> Path;
+    BasicBlock *Entry = G.getEntry(), *Exit = G.getExit();
+
     Path.push_back(Entry);
 
     DFS(G, Entry, Exit, Path, F);
 }
 
 static void printBasicBlock(const BasicBlock *BB, raw_ostream &OS) {
-    StringSet<MallocAllocator> Set;
+    StringSet<MallocAllocator> LineNumbers;
     for (const auto &I : *BB) {
         std::string S;
         raw_string_ostream Stream(S);
@@ -156,27 +135,27 @@ static void printBasicBlock(const BasicBlock *BB, raw_ostream &OS) {
             Stream << "unavailable";
         }
         Stream.flush();
-        Set.insert(S);
+        LineNumbers.insert(S);
     }
 
     OS << '"' << BB->getName() << '"' << " : [\n";
 
     bool needsComma = false;
-    for (const auto &Iter : Set) {
+    for (const auto &Iter : LineNumbers) {
         if (needsComma) OS << ",\n";
         needsComma = true;
         OS << "    " << '"' << Iter.getKey() << '"' ;
     }
     OS << "]";
-
 }
 
-static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS) {
+static void serializeProfile(const DirectedPtrGraph<BasicBlock *> &G,
+                             const PathProfiler<BasicBlock *> &PP,
+                             raw_ostream &OS) {
     OS << "{\n";
     OS << "\"BasicBlocks\": {\n";
     bool needsComma = false;
-    for (auto *V : G.allVertices()) {
-        const BasicBlock *BB = V->getValue<BasicBlock *>();
+    for (BasicBlock *BB : G.getAllNodes()) {
         if (needsComma) OS << ",\n";
         needsComma = true;
         printBasicBlock(BB, OS);
@@ -186,13 +165,16 @@ static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS) {
 
     needsComma = false;
     // Assign identifier to basicblock
-    findAllPaths(G, [&PP, &OS, &needsComma] (const std::list<Vertex *> &Path) {
+    findAllPaths(G,
+                 [&PP, &OS, &needsComma] (const std::list<BasicBlock *> &Path) {
             int PathNum = 0;
-            auto I = Path.begin();
-            const auto E = Path.end();
+            auto PathBegin = Path.begin();
+            const auto PathEnd = Path.end();
 
-            for (Vertex *V = *I, *W = *(++I); I != E; V = W, W = *(++I)) {
-                PathNum += PP.getEdgeVal(V, W);
+            for (BasicBlock *Src = *PathBegin, *Dest = *(++PathBegin);
+                 PathBegin != PathEnd;
+                 Src = Dest, Dest = *(++PathBegin)) {
+                PathNum += PP.getEdgeVal(Src, Dest);
             }
 
             if (needsComma) OS << ",\n";
@@ -200,11 +182,14 @@ static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS) {
             OS << "    " << '"' << PathNum << '"' << ": [\n";
 
             bool needsInnerComma = false;
-            for (Vertex *V : Path) {
-                BasicBlock *BB = V->getValue<BasicBlock *>();
+            for (BasicBlock *BB : Path) {
                 if (needsInnerComma) OS << ",\n";
                 needsInnerComma = true;
-                OS << "        " << '"' << BB->getName() << '"';
+                dbgs() << "Printing " << static_cast<void*>(BB) << " : "
+                       << (BB->hasName() ? BB->getName() : "No Name")
+                       << "\n";
+                OS << "        "
+                   << '"' << (BB->hasName() ? BB->getName() : "No Name") << '"';
             }
 
             OS << "    ]";
@@ -212,4 +197,58 @@ static void printProfile(SESEDAG &G, const PathProfiler &PP, raw_ostream &OS) {
 
     OS << "\n}\n}\n";
 }
+
+static Value* insertInstrumentation(Loop *L,
+                                    PathProfiler<BasicBlock *> &PP) {
+    IRBuilder<> Builder(&*L->getLoopPreheader()->getFirstInsertionPt());
+
+    Type  *PathNumType = Builder.getInt32Ty();
+    Value *PathNumPtr  = Builder.CreateAlloca(PathNumType, 0, nullptr,
+                                              "pathnumptr");
+
+    Builder.SetInsertPoint(&*L->getHeader()->getFirstInsertionPt());
+    Builder.CreateStore(Builder.getInt32(0), PathNumPtr);
+
+    for (const auto &Pair : PP) {
+        BasicBlock *Src, *Dest;
+        int Inc;
+
+        std::pair<BasicBlock *, BasicBlock *> Edge;
+        std::tie(Edge, Inc) = Pair;
+        std::tie(Src, Dest) = Edge;
+
+        dbgs() << "Splitting Edge between " << static_cast<void*>(Src) << " : "
+               << Src->getName() << " and " << static_cast<void*>(Dest)
+               << " : " << Dest->getName() << "\n";
+
+        BasicBlock *NewBlock = SplitEdge(Src, Dest);
+        dbgs() << "New block : " << static_cast<void*>(NewBlock) << "\n";
+        addBlockEntryToParents(L, NewBlock);
+
+        Builder.SetInsertPoint(&*NewBlock->getFirstInsertionPt());
+
+        Value *PathNum = Builder.CreateLoad(PathNumType, PathNumPtr, "pathnum");
+
+        Value *NewPathNum;
+        if (Inc > 0) {
+            NewPathNum = Builder.CreateAdd(PathNum,               /* LHS */
+                                           Builder.getInt32(Inc), /* RHS */
+                                           "newpathnum");
+        } else {
+            NewPathNum = Builder.CreateSub(PathNum,
+                                           Builder.getInt32(-Inc),
+                                           "newpathnum");
+        }
+        Builder.CreateStore(NewPathNum, PathNumPtr);
+    }
+
+    return PathNumPtr;
+}
+
+static void addBlockEntryToParents(Loop *L, BasicBlock *BB) {
+    do {
+        L->addBlockEntry(BB);
+    } while ((L = L->getParentLoop()) != nullptr);
+}
+
 

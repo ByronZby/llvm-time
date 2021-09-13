@@ -3,11 +3,8 @@ add_llvm_pass_plugin( LoopTime
   ProbeDecl.cpp
   Path.cpp
 
+  GraphAlgorithms.cpp
   PtrGraph.cpp
-  Cycle.cpp
-  PathProfiler.cpp
-  SingleEntrySingleExitDAG.cpp
-  TopologicalOrder.cpp
   
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms/Time

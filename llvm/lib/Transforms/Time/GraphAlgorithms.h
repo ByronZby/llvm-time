@@ -185,6 +185,11 @@ public:
     iterator end() {
         return iterator(Val.end());
     }
+
+    int getEdgeVal(PtrT V, PtrT W) const {
+        return Val.at(std::make_pair(static_cast<void *>(V),
+                                     static_cast<void *>(W)));
+    }
 };
 
 template<typename T>

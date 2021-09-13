@@ -69,7 +69,8 @@ public:
 
     void * getEntry() const {
         auto Es = getEntries();
-        return (Es.size() == 1) ? Es[0] : getInvalidMarker<void *>();
+        assert(Es.size() == 1 && "Has multiple entries");
+        return Es[0];
     }
 
     std::vector<void *> getExits() const {
@@ -86,7 +87,8 @@ public:
 
     void * getExit() const {
         auto Es = getExits();
-        return (Es.size() == 1) ? Es[0] : getInvalidMarker<void *>();
+        assert(Es.size() == 1 && "Has multiple entries");
+        return Es[0];
     }
 
     const std::map<void *, int> & getAllIndegrees() const {
